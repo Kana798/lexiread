@@ -7,6 +7,24 @@
   --blue: #2457d6;
   --yellow: #f6d970;
   --green: #2e7d32;
+
+  /* -------------------------------------------------------------------------
+     指针体系 — 指针本身也是这套纸感视觉的一部分
+     -------------------------------------------------------------------------
+     描边用 --ink（墨），填充用 --paper（纸），与界面同源，
+     而不是系统默认的灰色箭头。
+     每一项都写成 `<自定义>, <系统关键字>` 两段：SVG 载入失败、
+     或某些不支持 SVG 指针的环境会自动回退到系统指针，不会出现"光消失"。
+     # 在 data URI 里必须转义为 %23。
+  ------------------------------------------------------------------------- */
+  --cursor-default: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M5 2.6 5 18.4 9.2 14.5 11.9 20.8 14.6 19.6 11.9 13.4 17.4 13.4Z' fill='%23fffefa' stroke='%2321201d' stroke-width='1.25' stroke-linejoin='round'/></svg>") 5 3, default;
+  --cursor-pointer: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><g fill='%23fffefa' stroke='%2321201d' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'><path d='M9.4 11.2V4.3a1.55 1.55 0 0 1 3.1 0v6.9'/><path d='M12.5 11V9.2a1.55 1.55 0 0 1 3.1 0V11'/><path d='M15.6 11v-.6a1.55 1.55 0 0 1 3.1 0v4.8c0 3.4-2.3 5.9-5.7 5.9h-1c-1.7 0-3.2-.9-4-2.3l-1.9-3.6a1.55 1.55 0 0 1 2.7-1.5l.9 1.4'/></g></svg>") 9 3, pointer;
+  --cursor-text: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M12 4.5V19.5M8.5 4.5h7M8.5 19.5h7' stroke='%2321201d' stroke-width='1.5' stroke-linecap='round'/></svg>") 12 12, text;
+
+  /* 语义指针：直接沿用系统关键字，语义比造型更重要 */
+  --cursor-grab: grab;
+  --cursor-grabbing: grabbing;
+  --cursor-disabled: not-allowed;
 }
 
 * {
@@ -19,6 +37,61 @@ body {
   color: var(--ink);
   font-family: 'DM Sans', Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  cursor: var(--cursor-default);
+}
+
+/* ---------------------------------------------------------------------------
+   键盘焦点 — 补上此前的空白
+   ---------------------------------------------------------------------------
+   全站 113 个按钮，之前只有 2 处 :focus 规则，用 Tab 键导航时完全看不到
+   焦点落在哪。这里统一补上。
+   用 :focus-visible 而非 :focus —— 键盘操作时才出现焦点环，鼠标点击不留痕。
+--------------------------------------------------------------------------- */
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+   禁用态 — 此前没有任何样式，被禁用的按钮和可点击的长得一模一样
+   ---------------------------------------------------------------------------
+   app.ts 有三处真实场景会切 disabled：AI 精修防重复提交、改写处理中、
+   测验作答后锁定选项。没有反馈时，用户会对着已经失效的按钮反复点。
+--------------------------------------------------------------------------- */
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  cursor: var(--cursor-disabled);
+  opacity: 0.55;
+}
+
+/* 测验选项用背景色表达对错，禁用后必须保留完整对比度 */
+.quiz-option:disabled.correct,
+.quiz-option:disabled.wrong {
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------------------
+   选中行为 — 拖选正文时不该把界面文字一起选进来
+   ---------------------------------------------------------------------------
+   全站此前只有 4 条 user-select 规则，按钮、侧栏、播放器都是可拖选的：
+   划选文章时经常连带选中按钮标签、时间码，既影响观感也容易误操作。
+   正文区（.article-content / .read-word）保持可选，不受影响。
+--------------------------------------------------------------------------- */
+button,
+select,
+summary,
+label,
+.sidebar,
+.topbar,
+.audio-player,
+.player-time-label {
+  user-select: none;
 }
 
 .sidebar {
@@ -112,7 +185,7 @@ nav {
   border-radius: 8px;
   padding: 0;
   font: 500 13.5px 'DM Sans', sans-serif;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -224,7 +297,7 @@ nav {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   font: 500 11px 'DM Sans', sans-serif;
   transition: all 0.2s ease;
   overflow: hidden;
@@ -336,7 +409,7 @@ main {
   display: inline-flex;
   align-items: center;
   gap: 9px;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   user-select: none;
   background: #efebe2;
   padding: 6px 13px 6px 8px;
@@ -429,7 +502,7 @@ main {
 }
 
 button {
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   font-family: inherit;
 }
 
@@ -521,7 +594,7 @@ button {
   counter-increment: para-num;
   margin: 0 0 32px;
   position: relative;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: background 0.18s ease, border-color 0.18s ease;
   padding: 6px 12px 6px 14px;
   border-radius: 6px;
@@ -701,7 +774,7 @@ button {
   align-items: center;
   justify-content: center;
   font-size: 12px;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
   transition: all 0.2s ease;
 }
@@ -732,7 +805,7 @@ button {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   padding: 2px 0;
   transition: all 0.18s ease;
 }
@@ -815,7 +888,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   font-size: 11px;
   transition: all 0.2s ease;
   flex-shrink: 0;
@@ -932,7 +1005,7 @@ button {
   border-radius: 6px;
   padding: 5px 10px;
   font: 500 11.5px 'DM Sans', sans-serif;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: all 0.16s ease;
 }
 
@@ -1046,7 +1119,7 @@ button {
 .panel-word-ops button {
   background: transparent;
   border: none;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   font-size: 13px;
   padding: 3px 5px;
   border-radius: 4px;
@@ -1156,7 +1229,7 @@ body.immersive-reading-mode .audio-player:hover {
   align-items: center;
   gap: 8px;
   font: 500 13px 'DM Sans', sans-serif;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.16);
   opacity: 0.55;
   transition: opacity 0.2s ease, transform 0.2s ease, background 0.2s ease;
@@ -1382,7 +1455,7 @@ blockquote {
   color: #3e443f;
   font-style: italic;
   line-height: 1.5;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: background-color 0.15s;
 }
 
@@ -1414,7 +1487,7 @@ blockquote {
   font-size: 11.5px;
   padding: 2px 7px;
   border-radius: 4px;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: all 0.14s;
 }
 
@@ -1584,7 +1657,7 @@ blockquote {
 }
 
 .library-card {
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
 }
 
 .library-card:hover {
@@ -1774,7 +1847,7 @@ blockquote {
   border-radius: 6px;
   font-size: 11.5px;
   font-weight: 500;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1889,7 +1962,7 @@ blockquote {
   font-size: 11px;
   display: grid;
   place-items: center;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   margin-left: auto;
   transition: transform 0.15s ease;
 }
@@ -1907,7 +1980,7 @@ blockquote {
   font-family: 'DM Sans', sans-serif;
   border-radius: 9999px;
   padding: 3px 8px;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   white-space: nowrap;
   transition: all 0.15s ease;
 }
@@ -2009,7 +2082,7 @@ blockquote {
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.18);
   outline: none;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: background 0.15s ease;
 }
 
@@ -2026,7 +2099,7 @@ blockquote {
   background: #52c41a;
   border: 2px solid #ffffff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
-  cursor: pointer;
+  cursor: var(--cursor-grab);
   transition: transform 0.15s ease, background-color 0.15s ease;
 }
 
@@ -2042,8 +2115,15 @@ blockquote {
   background: #52c41a;
   border: 2px solid #ffffff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
-  cursor: pointer;
+  cursor: var(--cursor-grab);
   transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+/* 拖动中换成「抓握」手势，明确暗示进度条可以拖 */
+.player-progress-bar:active,
+.player-progress-bar:active::-webkit-slider-thumb,
+.player-progress-bar:active::-moz-range-thumb {
+  cursor: var(--cursor-grabbing);
 }
 
 .player-controls {
@@ -2062,7 +2142,7 @@ blockquote {
   color: #d8d3c5;
   display: grid;
   place-items: center;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   padding: 0;
   transition: all 0.15s ease;
 }
@@ -2084,7 +2164,7 @@ blockquote {
   font-size: 14px;
   display: grid;
   place-items: center;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   box-shadow: 0 3px 10px rgba(56, 161, 105, 0.35);
   transition: all 0.16s ease;
 }
@@ -2125,7 +2205,7 @@ blockquote {
   border: none;
   color: #faf7ef;
   font: 500 11.5px 'DM Sans', sans-serif;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   outline: none;
   padding: 0;
 }
@@ -2145,7 +2225,7 @@ blockquote {
   display: grid;
   place-items: center;
   font-size: 12px;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   padding: 0;
   transition: all 0.15s ease;
 }
@@ -2304,7 +2384,7 @@ blockquote {
   position: absolute;
   color: transparent;
   white-space: pre;
-  cursor: text;
+  cursor: var(--cursor-text);
   transform-origin: 0 0;
 }
 
@@ -2314,7 +2394,7 @@ blockquote {
 
 /* Word Decorations & Smooth Micro-Interactions (Soothing Eye-Care Palette) */
 .read-word {
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   position: relative;
   display: inline;
   border-radius: 3px;
@@ -2376,7 +2456,7 @@ blockquote {
   font-size: 11px;
   font-weight: 600;
   line-height: 1.2;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   z-index: 4;
   transition: all 0.18s cubic-bezier(0.2, 0, 0, 1);
   box-shadow: 0 1px 3px rgba(123, 83, 12, 0.09);
@@ -2411,7 +2491,7 @@ blockquote {
   border: 1px solid rgba(56, 142, 94, 0.35);
   color: #276240;
   border-radius: 5px;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: all 0.15s ease;
 }
 
@@ -2456,7 +2536,7 @@ blockquote {
   border: none;
   font-size: 16px;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   padding: 0 4px;
 }
 
@@ -2503,7 +2583,7 @@ blockquote {
   font-size: 11px;
   font-weight: 600;
   padding: 3px 8px;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: background 0.15s ease;
 }
 
@@ -2611,7 +2691,7 @@ blockquote {
 .read-word {
   transition: background 0.15s ease, box-shadow 0.15s ease;
   user-select: text;
-  cursor: text;
+  cursor: var(--cursor-text);
 }
 
 .read-word:hover {
@@ -2626,7 +2706,7 @@ blockquote {
 
 .paper.is-mouse-selecting,
 .paper.is-mouse-selecting * {
-  cursor: text !important;
+  cursor: var(--cursor-text) !important;
 }
 
 .paper.is-mouse-selecting .read-word {
@@ -2804,7 +2884,7 @@ blockquote {
   border-radius: 6px;
   font-size: 11.5px;
   font-family: 'DM Sans', sans-serif;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: all 0.16s cubic-bezier(0.2, 0, 0, 1);
   display: inline-flex;
   align-items: center;
@@ -2860,7 +2940,7 @@ blockquote {
   align-items: center;
   gap: 6px;
   font-weight: 500;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: all 0.15s ease;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
@@ -2885,7 +2965,7 @@ blockquote {
   border-radius: 10px;
   padding: 14px 12px;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -2946,7 +3026,7 @@ blockquote {
   font-size: 11.5px;
   font-family: 'DM Mono', monospace;
   color: #4b4843;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: all 0.14s ease;
 }
 
@@ -2974,7 +3054,7 @@ blockquote {
   right: 8px;
   background: transparent;
   border: 0;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   font-size: 14px;
   color: var(--muted);
   padding: 4px;
@@ -3059,7 +3139,7 @@ blockquote {
   font-size: 11.5px;
   font-weight: 500;
   color: #555047;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   white-space: nowrap;
   transition: all 0.15s;
   text-align: center;
@@ -3138,7 +3218,7 @@ blockquote {
   padding: 2px 7px;
   font-size: 11px;
   color: #555047;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: all 0.15s;
 }
 
@@ -3240,7 +3320,7 @@ blockquote {
   border: 1.5px solid #d9d3c5;
   border-radius: 10px;
   padding: 14px;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
   position: relative;
 }
@@ -3384,7 +3464,7 @@ blockquote {
   border-radius: 6px;
   font-size: 12px;
   font-weight: 500;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: all 0.15s;
 }
 
@@ -3436,7 +3516,7 @@ blockquote {
   color: #f5f2e9;
   font-size: 11.5px;
   font-family: 'DM Mono', monospace;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   outline: none;
 }
 
@@ -3455,7 +3535,7 @@ blockquote {
   border: 0;
   color: #f5f2e9;
   font-size: 11px;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   padding: 2px 4px;
 }
 
@@ -3478,7 +3558,7 @@ blockquote {
   border-radius: 6px;
   padding: 5px 10px;
   font-size: 11.5px;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: all 0.15s;
 }
 
@@ -3567,7 +3647,7 @@ blockquote {
   padding: 4px 10px;
   border-radius: 6px;
   transition: background 0.2s, box-shadow 0.2s;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
 }
 
 .orig-editorial-content .orig-para:first-child::first-letter {
@@ -3592,7 +3672,7 @@ blockquote {
 
 .orig-editorial-content .orig-word {
   display: inline;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   padding: 1px 1px;
   margin: 0;
   border-radius: 3px;
@@ -3628,7 +3708,7 @@ blockquote {
   background: var(--paper);
   border-radius: 8px;
   text-align: center;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: all 0.15s;
 }
 
@@ -3689,7 +3769,7 @@ blockquote {
   border-radius: 6px;
   background: #fdfbf7;
   font-size: 13px;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
   transition: all 0.14s;
 }
 
@@ -3717,7 +3797,7 @@ blockquote {
   max-width: 480px;
   height: 260px;
   margin: 20px auto;
-  cursor: pointer;
+  cursor: var(--cursor-pointer);
 }
 
 .flashcard-inner {

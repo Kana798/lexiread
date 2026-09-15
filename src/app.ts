@@ -3745,13 +3745,6 @@ function setImmersiveMode(active: boolean) {
   const check = $("#toggleImmersiveCheck") as HTMLInputElement | null;
   if (check) check.checked = active;
 
-  const railBtn = $("#railImmersiveBtn");
-  if (railBtn) {
-    railBtn.classList.toggle("active", active);
-    const railLabel = railBtn.querySelector(".rail-label");
-    if (railLabel) railLabel.textContent = active ? "退出沉浸" : "沉浸阅读";
-  }
-
   const exitHud = $("#immersiveFloatingExit");
   if (exitHud) {
     exitHud.style.display = active ? "block" : "none";
@@ -3769,13 +3762,8 @@ if (toggleImmersiveCheckEl) {
   };
 }
 
-const railImmersiveBtnEl = $("#railImmersiveBtn");
-if (railImmersiveBtnEl) {
-  railImmersiveBtnEl.onclick = () => {
-    setImmersiveMode(!immersiveActive);
-  };
-}
-
+// 沉浸式入口在顶栏（#topbarImmersiveToggle 是 <label for="toggleImmersiveCheck">，
+// 靠 label 关联直接触发上面的 change 事件），这里只需处理退出按钮。
 const exitImmersiveBtnEl = $("#exitImmersiveBtn");
 if (exitImmersiveBtnEl) {
   exitImmersiveBtnEl.onclick = () => {
