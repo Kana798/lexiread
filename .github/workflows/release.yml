@@ -41,8 +41,10 @@ jobs:
       - name: Build frontend and server bundle
         run: npm run build
 
+      # CI 环境下 electron-builder 会因检测到 CI 而隐式启用发布，进而要求 GH_TOKEN；
+      # 这里显式禁用，发布统一交给下面的 gh release upload 步骤。
       - name: Package desktop app (NSIS + portable)
-        run: npx electron-builder --win nsis portable --config.directories.output=release
+        run: npx electron-builder --win nsis portable --publish never --config.directories.output=release
 
       - name: Show produced installers
         shell: bash
