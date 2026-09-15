@@ -42,11 +42,6 @@
 > `Local Storage` 中。修改顶层 `name` 或新增顶层 `productName` 会改变 userData 路径，
 > **导致用户数据"凭空消失"**（实际是换了目录）。如需更名，必须同时迁移该目录。
 
-# Original AI Studio notes
-
-This contains everything you need to run your app locally.
-
-View your app in AI Studio: https://ai.studio/apps/14ce5319-797b-481a-813c-44129a380a86
 
 ## Run Locally
 
