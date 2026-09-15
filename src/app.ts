@@ -1,5 +1,5 @@
 // LexiRead Core Application Logic
-// Inherited and enhanced with Gemini 3.8 Flash backend features
+// Inherited and enhanced with a built-in DeepSeek backend (server-side proxy)
 import { formPdfLine } from './pdf-extraction';
 import { pausePlaybackEngine, resumePlaybackEngine } from './playback-engine';
 import { diagnoseText as sharedDiagnoseText, repairText as sharedRepairText } from './text-quality';
@@ -423,11 +423,12 @@ const providerPresets: Record<string, {
   label: string;
 }> = {
   gemini: {
+    // 内部 id 保留 "gemini" 以兼容已存在的 localStorage 配置；实际引擎是服务端直连的 DeepSeek。
     url: "",
-    defaultModel: "gemini-3.8-flash",
-    models: ["gemini-3.8-flash"],
-    hint: "系统原生免配置直连，高速稳定，专为英语阅读精调",
-    label: "内置 Gemini 3.8",
+    defaultModel: "deepseek-chat",
+    models: ["deepseek-chat"],
+    hint: "应用内置引擎，服务端直连 DeepSeek，配置一次 Key 即可使用全部 AI 功能",
+    label: "内置 DeepSeek",
   },
   deepseek: {
     url: "https://api.deepseek.com/chat/completions",
@@ -481,7 +482,7 @@ function updateModelBadge() {
   const badgeBtn = $("#currentModelBadge");
   const settingsStatusText = $("#settingsStatusText");
 
-  let label = "内置 Gemini 3.8";
+  let label = "内置 DeepSeek";
   if (cfg.provider === "deepseek") {
     label = `DeepSeek (${cfg.model || "chat"})`;
   } else if (cfg.provider === "qwen") {
@@ -494,7 +495,7 @@ function updateModelBadge() {
   if (badgeBtn) badgeBtn.title = `当前大模型引擎：${label}，点击进入设置切换`;
   if (settingsStatusText) {
     settingsStatusText.textContent = cfg.provider === "gemini"
-      ? "当前引擎：系统内置 Gemini 3.8 Flash 已就绪（免配置直连）"
+      ? "当前引擎：内置 DeepSeek 已就绪（配置 Key 后服务端直连）"
       : `当前引擎：已配置接入 ${label}`;
   }
 }
@@ -2779,7 +2780,7 @@ if ($("#testConnectionBtn")) {
     if (currentSelectedProvider === "gemini") {
       box.style.display = "block";
       box.className = "connection-status-box success";
-      box.textContent = "✓ 系统内置 Gemini 3.8 Flash 已就绪，免配置直连运行正常！";
+      box.textContent = "✓ 内置 DeepSeek 引擎已就绪，连接测试通过！";
       return;
     }
 
@@ -2822,7 +2823,7 @@ if ($("#testConnectionBtn")) {
 // Reset Default
 if ($("#resetDefaultBtn")) {
   $("#resetDefaultBtn").onclick = () => {
-    if (confirm("确定要恢复使用系统默认的 Gemini 3.8 Flash 吗？")) {
+    if (confirm("确定要恢复使用内置 DeepSeek 引擎吗？")) {
       const defaultCfg: LLMSettings = {
         provider: "gemini",
         url: "",
@@ -2839,7 +2840,7 @@ if ($("#resetDefaultBtn")) {
       if (box) {
         box.style.display = "block";
         box.className = "connection-status-box success";
-        box.textContent = "✓ 已恢复默认使用系统内置 Gemini 3.8 Flash";
+        box.textContent = "✓ 已恢复使用内置 DeepSeek 引擎";
       }
     }
   };
@@ -2862,7 +2863,7 @@ if ($("#saveSettings")) {
       box.style.display = "block";
       box.className = "connection-status-box success";
       box.textContent = `✓ 设置已保存！当前大模型引擎：${
-        cfg.provider === "gemini" ? "系统内置 Gemini 3.8 Flash" : `${cfg.provider.toUpperCase()} (${cfg.model || "默认"})`
+        cfg.provider === "gemini" ? "内置 DeepSeek" : `${cfg.provider.toUpperCase()} (${cfg.model || "默认"})`
       }`;
     }
     const saveBtn = $("#saveSettings");
@@ -3772,6 +3773,67 @@ if (exitImmersiveBtnEl) {
 }
 
 // ==========================================
+// First-run setup guide (built-in DeepSeek key)
+// Shows once per session while the key is unconfigured; the key lands in
+// %APPDATA%/LexiRead/.env via /api/setup-llm-key and takes effect immediately.
+// ==========================================
+const setupGuideDialog = $("#setupGuideDialog") as HTMLDialogElement | null;
+if (setupGuideDialog) {
+  fetch("/api/health")
+    .then((r) => r.json())
+    .then((health: any) => {
+      if (health?.hasApiKey) return; // already configured — never nag
+      if (sessionStorage.getItem("lexi-setup-dismissed")) return; // dismissed this session
+      setupGuideDialog.showModal();
+    })
+    .catch(() => {});
+
+  const msgEl = $("#setupGuideMsg");
+  const saveKey = async () => {
+    const input = $("#setupGuideKeyInput") as HTMLInputElement | null;
+    const key = input?.value.trim() || "";
+    if (!msgEl) return;
+    if (!key) {
+      msgEl.textContent = "请先粘贴 API Key";
+      return;
+    }
+    try {
+      const r = await fetch("/api/setup-llm-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: key }),
+      });
+      const data = await r.json();
+      if (data.ok) {
+        msgEl.textContent = "✓ " + (data.message || "已保存");
+        updateModelBadge();
+        setTimeout(() => setupGuideDialog.close(), 1100);
+      } else {
+        msgEl.textContent = data.error || "保存失败，请重试";
+      }
+    } catch {
+      msgEl.textContent = "网络错误，请确认本地服务已启动";
+    }
+  };
+
+  const saveBtn = $("#setupGuideSaveBtn");
+  const laterBtn = $("#setupGuideLaterBtn");
+  const keyInput = $("#setupGuideKeyInput") as HTMLInputElement | null;
+  if (saveBtn) saveBtn.onclick = saveKey;
+  if (laterBtn) {
+    laterBtn.onclick = () => {
+      sessionStorage.setItem("lexi-setup-dismissed", "1");
+      setupGuideDialog.close();
+    };
+  }
+  if (keyInput) {
+    keyInput.addEventListener("keydown", (e) => {
+      if ((e as KeyboardEvent).key === "Enter") saveKey();
+    });
+  }
+}
+
+// ==========================================
 // Natural Paragraph Numbering Prominence Mode
 // ==========================================
 type ParaNumMode = "standard" | "prominent" | "subtle" | "hidden";
@@ -3848,7 +3910,7 @@ async function fetchSimplification(level: string) {
   const applyBtn = $("#applySimplifyBtn");
   if (!statusEl || !box || !applyBtn) return;
 
-  statusEl.textContent = `正在使用 Gemini 3.8 Flash 将文章改写为 CEFR ${level} 等级…`;
+  statusEl.textContent = `正在使用内置 DeepSeek 引擎将文章改写为 CEFR ${level} 等级…`;
   box.style.display = "none";
   applyBtn.disabled = true;
 

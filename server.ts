@@ -1,10 +1,12 @@
 import express, { Request, Response, NextFunction } from "express";
+import fs from "node:fs";
 import path from "path";
-import { GoogleGenAI, Type } from "@google/genai";
+import dotenv from "dotenv";
 import { randomUUID } from "node:crypto";
 import { buildYoudaoRequest } from "./src/youdao-translation";
 import { translateViaPublicProviders } from "./src/public-translation";
 import { resolveEnvCandidates, loadEnvFromCandidates, pickRecommendedEnvPath } from "./src/env-loader";
+import { parseLlmJson, schemaToPrompt, upsertEnvKey, isLoopbackAddress } from "./src/llm-utils";
 
 import { resolveServerRuntime } from './server-runtime';
 
@@ -81,19 +83,69 @@ for (const method of ["get", "post", "put", "patch", "delete"] as const) {
   };
 }
 
-function getGeminiClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
-    return null;
-  }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        "User-Agent": "aistudio-build",
+// ---------------------------------------------------------------------------
+// Built-in LLM: DeepSeek (OpenAI-compatible chat completions).
+// Replaces the former Gemini integration — DeepSeek is served through the same
+// `callOpenAICompatible` helper used for user-supplied providers, so there is no
+// vendor SDK dependency at all.
+// ---------------------------------------------------------------------------
+const BUILTIN_LLM_URL = "https://api.deepseek.com/chat/completions";
+const BUILTIN_LLM_MODEL = "deepseek-chat";
+
+function hasBuiltInLlmKey(): boolean {
+  const key = process.env.DEEPSEEK_API_KEY;
+  return Boolean(key && key.trim() && !key.includes("YOUR_"));
+}
+
+function getBuiltInLlmConfig(): CustomLLMConfig | null {
+  if (!hasBuiltInLlmKey()) return null;
+  return {
+    provider: "builtin",
+    url: BUILTIN_LLM_URL,
+    key: (process.env.DEEPSEEK_API_KEY as string).trim(),
+    model: BUILTIN_LLM_MODEL,
+  };
+}
+
+/** Strips the markdown code fences LLMs love to wrap JSON in, then parses. */
+const LLM_JSON_SYSTEM =
+  "You are an expert English learning assistant for ESL learners. " +
+  "Respond with valid JSON only — no markdown fences, no commentary.";
+
+// Minimal stand-ins for the former @google/genai schema enum. Schema objects are
+// no longer sent to any API — they are flattened into a textual JSON-shape hint
+// for the prompt, so only the discriminant values matter here.
+const Type = { OBJECT: "object", STRING: "string", INTEGER: "integer", ARRAY: "array" } as const;
+
+/**
+ * Gemini-SDK-shaped shim over the built-in DeepSeek endpoint. Existing call
+ * sites keep their `ai.models.generateContent({ model, contents, config })`
+ * shape; the engine underneath is a plain OpenAI-compatible POST.
+ */
+function getLlmClient() {
+  const llm = getBuiltInLlmConfig();
+  if (!llm) return null;
+  return {
+    models: {
+      generateContent: async (opts: {
+        model?: string; // accepted for call-site compatibility; the built-in model is fixed
+        contents: string;
+        config?: { responseMimeType?: string; responseSchema?: any };
+      }): Promise<{ text: string }> => {
+        const wantsJson = Boolean(opts.config?.responseSchema || opts.config?.responseMimeType === "application/json");
+        const schemaHint = opts.config?.responseSchema ? schemaToPrompt(opts.config.responseSchema) : "";
+        const messages = [
+          {
+            role: "system",
+            content: wantsJson ? LLM_JSON_SYSTEM + (schemaHint ? ` Match this JSON shape exactly: ${schemaHint}` : "") : "You are a precise assistant for an English reading app.",
+          },
+          { role: "user", content: opts.contents },
+        ];
+        const raw = await callOpenAICompatible(llm, messages, wantsJson);
+        return { text: raw || "" };
       },
     },
-  });
+  };
 }
 
 const YOUDAO_ERROR_HINTS: Record<string, string> = {
@@ -479,12 +531,12 @@ function generateSmartWordFallback(word: string, contextSentence: string): any {
 
 // Health check endpoint
 app.get("/api/health", (_req: Request, res: Response) => {
-  const hasKey = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_KEY");
+  const hasApiKey = hasBuiltInLlmKey();
   const youdaoConfigured = Boolean(process.env.YOUDAO_APP_KEY && process.env.YOUDAO_APP_SECRET);
   res.json({
     status: "ok",
-    hasApiKey: hasKey,
-    model: "gemini-3.8-flash",
+    hasApiKey,
+    model: BUILTIN_LLM_MODEL,
     youdaoConfigured,
     // Ordered provider chain actually used by /api/translate for the "web" engine.
     translationChain: [
@@ -493,7 +545,7 @@ app.get("/api/health", (_req: Request, res: Response) => {
       "youdao-dict",
       "mymemory",
       "google",
-      ...(hasKey ? ["gemini"] : []),
+      ...(hasApiKey ? ["deepseek"] : []),
       "heuristic-fallback",
     ],
     envFilesLoaded: envLoadResult.loaded,
@@ -559,13 +611,29 @@ async function callOpenAICompatible(
 app.post("/api/test-connection", async (req: Request, res: Response) => {
   const { provider, url, key, model } = req.body;
   if (provider === "gemini" || (!url && !key)) {
-    const hasKey = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_KEY");
+    // Built-in engine: actually ping DeepSeek so the settings page shows truth.
+    const llm = getBuiltInLlmConfig();
+    if (!llm) {
+      res.json({
+        success: false,
+        provider: "gemini",
+        model: BUILTIN_LLM_MODEL,
+        message: "内置引擎尚未配置：请在首跑引导中粘贴 DeepSeek API Key（platform.deepseek.com 申请）",
+      });
+      return;
+    }
+    const started = Date.now();
+    const raw = await callOpenAICompatible(llm, [{ role: "user", content: "Hi" }], false);
+    if (raw === null) {
+      res.json({ success: false, provider: "gemini", model: BUILTIN_LLM_MODEL, message: "DeepSeek 连接失败：请检查 Key 是否有效、账户是否有余额" });
+      return;
+    }
     res.json({
       success: true,
       provider: "gemini",
-      model: "gemini-3.8-flash",
-      message: "系统内置 Gemini 3.8 Flash 连接正常（开箱即用）",
-      latencyMs: 95,
+      model: BUILTIN_LLM_MODEL,
+      message: "内置 DeepSeek 引擎连接正常",
+      latencyMs: Date.now() - started,
     });
     return;
   }
@@ -626,6 +694,34 @@ app.post("/api/test-connection", async (req: Request, res: Response) => {
       error: `连接失败: ${err.message || "请求超时，请检查网络或代理"}`,
       latencyMs,
     });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// First-run setup: persist the built-in LLM key into the user's `.env`.
+// The env loader already scans `%APPDATA%/LexiRead/.env` with a higher priority
+// than the bundled defaults, so writing there makes the key stick across
+// restarts while never touching the repository or the shipped defaults.
+// ---------------------------------------------------------------------------
+app.post("/api/setup-llm-key", (req: Request, res: Response) => {
+  // The local server may be exposed to the LAN via LEXI_BIND_HOST=0.0.0.0;
+  // credential mutation must stay a loopback-only operation.
+  if (!isLoopbackAddress(req.socket.remoteAddress || "")) {
+    res.status(403).json({ ok: false, error: "凭证写入仅允许在本机操作（局域网访问已禁用此端点）" });
+    return;
+  }
+  const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey.trim() : "";
+  if (!apiKey || apiKey.length < 8) {
+    res.status(400).json({ ok: false, error: "请粘贴有效的 DeepSeek API Key（sk- 开头）" });
+    return;
+  }
+  const target = pickRecommendedEnvPath(process.env);
+  try {
+    upsertEnvKey(target, "DEEPSEEK_API_KEY", apiKey);
+    process.env.DEEPSEEK_API_KEY = apiKey; // effective immediately, no restart needed
+    res.json({ ok: true, path: target, message: "DeepSeek Key 已保存并立即生效" });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: `写入配置失败: ${err?.message || err}` });
   }
 });
 
@@ -802,29 +898,32 @@ async function translateViaWeb(cleanText: string, context?: string): Promise<{
     }
   }
 
-  // 4. Fallback to Gemini if web translation failed or hit limits for phrases/sentences
+  // 4. Fallback to the built-in LLM if web translation failed or hit limits for phrases/sentences
   if (!webTranslation && !isWord) {
-    const ai = getGeminiClient();
-    if (ai) {
+    const llm = getBuiltInLlmConfig();
+    if (llm) {
       try {
-        const geminiResp = await ai.models.generateContent({
-          model: "gemini-3.8-flash",
-          contents: `Translate the following English text into fluent, natural Chinese. Only output the Chinese translation without commentary or quotes:\n\n${cleanText}`,
-        });
-        const aiText = geminiResp.text?.trim();
+        const aiText = (
+          await callOpenAICompatible(llm, [
+            {
+              role: "user",
+              content: `Translate the following English text into fluent, natural Chinese. Only output the Chinese translation without commentary or quotes:\n\n${cleanText}`,
+            },
+          ])
+        )?.trim();
         if (aiText) {
           return {
             translation: aiText,
             phonetic: "",
             partOfSpeech: "短语 / 句子",
-            details: "AI 神经模型智能精准翻译",
+            details: "DeepSeek 神经模型智能精准翻译",
             contextual: context ? `在原文语境中匹配含义` : "",
             engine: "llm",
-            provider: "gemini",
+            provider: "deepseek",
           };
         }
       } catch (e) {
-        console.warn("Gemini translate fallback failed:", e);
+        console.warn("DeepSeek translate fallback failed:", e);
       }
     }
   }
@@ -951,8 +1050,8 @@ Return valid JSON only:
     }
   }
 
-  // 2. Gemini 3.8 Flash
-  const ai = getGeminiClient();
+  // 2. Built-in LLM (DeepSeek)
+  const ai = getLlmClient();
   if (ai) {
     try {
       const isWord = cleanText.split(/\s+/).length === 1;
@@ -978,14 +1077,13 @@ Return JSON:
 }`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
         contents: prompt,
         config: {
           responseMimeType: "application/json",
         },
       });
 
-      const parsed = JSON.parse(response.text || "{}");
+      const parsed = parseLlmJson(response.text);
       res.json({ ...parsed, engine: "llm" });
       return;
     } catch (err) {
@@ -1015,7 +1113,7 @@ app.post("/api/analyze-word", async (req: Request, res: Response) => {
     return;
   }
 
-  const ai = getGeminiClient();
+  const ai = getLlmClient();
   if (ai) {
     try {
       const prompt = `Analyze the English word "${cleanWord}" in the context of: "${contextSentence || ""}".
@@ -1111,7 +1209,7 @@ Return pure JSON with this exact structure:
   }
 
   // 2. Gemini 3.8 Flash
-  const ai = getGeminiClient();
+  const ai = getLlmClient();
 
   if (ai) {
     try {
@@ -1211,7 +1309,7 @@ app.post("/api/simplify", async (req: Request, res: Response) => {
     return;
   }
 
-  const ai = getGeminiClient();
+  const ai = getLlmClient();
   if (ai) {
     try {
       const prompt = `Rewrite the following English text to suit a CEFR ${targetLevel} English learner.
@@ -1296,7 +1394,7 @@ app.post("/api/bilingual-align", async (req: Request, res: Response) => {
     return;
   }
 
-  const ai = getGeminiClient();
+  const ai = getLlmClient();
   if (ai) {
     try {
       const prompt = `Segment this English text into sentences and provide natural Chinese translation for each sentence:
@@ -1378,7 +1476,7 @@ Provide a friendly, educational, structured answer in Chinese. Use markdown form
   }
 
   // 2. Gemini 3.8 Flash
-  const ai = getGeminiClient();
+  const ai = getLlmClient();
   if (ai) {
     try {
       const prompt = `You are an expert English reading tutor (英语阅读专属AI助教).
@@ -1467,7 +1565,7 @@ Return ONLY pure JSON.`;
   }
 
   // 2. Gemini 3.8 Flash
-  const ai = getGeminiClient();
+  const ai = getLlmClient();
   if (ai) {
     try {
       const response = await ai.models.generateContent({
@@ -1563,7 +1661,7 @@ app.post("/api/generate-quiz", async (req: Request, res: Response) => {
     return;
   }
 
-  const ai = getGeminiClient();
+  const ai = getLlmClient();
   if (ai) {
     try {
       const prompt = `Based on this passage, generate 3 reading comprehension multiple choice questions with 4 options each and explanations:
@@ -1734,7 +1832,7 @@ app.post("/api/repair-text", async (req: Request, res: Response) => {
   // 9. If AI Deep Repair is requested, use Gemini to polish formatting & flow
   let usedAi = false;
   if (useAi && repaired.length > 20) {
-    const ai = getGeminiClient();
+    const ai = getLlmClient();
     if (ai) {
       try {
         const prompt = `You are an expert English document formatting and proofreading engine.
@@ -1816,7 +1914,7 @@ async function startServer() {
     console.log(`Server running on http://${runtime.bindHost}:${PORT}`);
     console.log(
       `[config] Translation chain: youdao=${Boolean(process.env.YOUDAO_APP_KEY)} ` +
-        `gemini=${Boolean(process.env.GEMINI_API_KEY)}`
+        `deepseek=${hasBuiltInLlmKey()}`
     );
   });
 }

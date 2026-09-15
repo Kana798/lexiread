@@ -62,7 +62,7 @@
           </div>
         </div>
         <div class="header-actions">
-          <button class="model-badge-btn" id="currentModelBadge" title="点击切换或配置大模型">⚡ <span id="currentModelLabel">内置 Gemini 3.8</span></button>
+          <button class="model-badge-btn" id="currentModelBadge" title="点击切换或配置大模型">⚡ <span id="currentModelLabel">内置 DeepSeek</span></button>
           <button class="outline-btn" id="toggleParaNum" title="调整自然段序号标注大小与明显程度">¶ 段号: 清晰</button>
           <button class="outline-btn" id="openPdfReader">导入 PDF</button>
           <button class="outline-btn" id="togglePdfView" title="切换至原版排版与声画同步播放模式">🎧 原版播放</button>
@@ -505,7 +505,7 @@
       </header>
       <div class="settings-card">
         <div class="api-status-badge" id="settingsStatusBadge">
-          <span>●</span> <span id="settingsStatusText">当前引擎：内置 Gemini 3.8 Flash 已就绪</span>
+          <span>●</span> <span id="settingsStatusText">当前引擎：内置 DeepSeek（配置 Key 后启用）</span>
         </div>
 
         <!-- Translation Engine Preference -->
@@ -602,9 +602,9 @@
         <!-- Provider Switcher -->
         <div class="provider-selector">
           <button class="provider-btn active" data-provider="gemini">
-            <span class="p-icon">🌟</span>
-            <span class="p-name">系统内置 (Gemini)</span>
-            <span class="p-tag">免配置·推荐</span>
+            <span class="p-icon">🐋</span>
+            <span class="p-name">内置 DeepSeek</span>
+            <span class="p-tag">配置 Key·推荐</span>
           </button>
           <button class="provider-btn" data-provider="deepseek">
             <span class="p-icon">🐋</span>
@@ -658,6 +658,44 @@
   </main>
 
   <!-- MODALS -->
+  <!-- First-run setup guide: shown when the built-in LLM key is missing -->
+  <dialog id="setupGuideDialog">
+    <div class="setup-guide">
+      <div class="setup-guide-head">
+        <h2>启用 AI 学习引擎</h2>
+        <p class="setup-guide-sub">三步配置，解锁 AI 改写、阅读导师、语法拆解、智能测验与双语对照</p>
+      </div>
+      <ol class="setup-guide-steps">
+        <li>
+          <span class="step-num">1</span>
+          <div class="step-body">
+            <strong>注册 DeepSeek 开放平台</strong>
+            <p>访问 <a href="https://platform.deepseek.com/" target="_blank" rel="noopener">platform.deepseek.com</a>，手机号即可注册</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">2</span>
+          <div class="step-body">
+            <strong>创建 API Key</strong>
+            <p>左侧「API keys」→「创建 API key」，复制 <code>sk-</code> 开头的密钥</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">3</span>
+          <div class="step-body">
+            <strong>粘贴到下面并保存</strong>
+            <input id="setupGuideKeyInput" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false">
+            <p id="setupGuideMsg" class="setup-guide-msg"></p>
+          </div>
+        </li>
+      </ol>
+      <div class="setup-guide-actions">
+        <button id="setupGuideSaveBtn" class="setup-guide-primary">保存并启用</button>
+        <button id="setupGuideLaterBtn" class="setup-guide-ghost">稍后再说</button>
+      </div>
+      <p class="setup-guide-note">Key 仅保存在本机 %APPDATA%/LexiRead/.env，不会上传到任何服务器</p>
+    </div>
+  </dialog>
   <!-- Editor Dialog -->
   <dialog id="editorDialog">
     <form method="dialog" class="editor">
