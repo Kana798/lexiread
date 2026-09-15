@@ -1,0 +1,885 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LexiRead · 英语阅读器</title>
+  <meta name="description" content="LexiRead · 深度英语阅读器，集成即时划词释义、长难句语法拆解、全文语音朗读、PDF/音频导入、CEFR 分级改写与 AI 伴读。" />
+  <meta property="og:title" content="LexiRead · 英语阅读器" />
+  <meta property="og:description" content="LexiRead · 深度英语阅读器，集成即时划词释义、长难句语法拆解、全文语音朗读、PDF/音频导入、CEFR 分级改写与 AI 伴读。" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <aside class="sidebar" id="appSidebar">
+    <a class="brand" href="#" title="LexiRead"><span class="brand-mark">L</span><span class="brand-text">LexiRead</span></a>
+    <nav>
+      <button class="nav-item active" data-view="reader" title="阅读器">
+        <span class="nav-icon">◉</span>
+        <span class="nav-label">阅读器</span>
+      </button>
+      <button class="nav-item" data-view="library" title="我的文本">
+        <span class="nav-icon">▤</span>
+        <span class="nav-label">我的文本</span>
+      </button>
+      <button class="nav-item" data-view="words" title="生词本">
+        <span class="nav-icon">◇</span>
+        <span class="nav-label">生词本</span>
+        <b id="wordCount">0</b>
+      </button>
+    </nav>
+    <div class="sidebar-bottom">
+      <button class="nav-item" data-view="settings" title="设置与偏好">
+        <span class="nav-icon">⚙</span>
+        <span class="nav-label">设置</span>
+      </button>
+      <button class="sidebar-pin-btn" id="sidebarPinBtn" title="点击保持展开 / 鼠标移开自动收缩">
+        <span class="pin-icon">⇄</span>
+        <span class="pin-label">锁定展开</span>
+      </button>
+      <p class="sidebar-caption">为深入阅读而设计</p>
+    </div>
+  </aside>
+
+  <main>
+    <!-- READER VIEW -->
+    <section id="reader" class="view active">
+      <header class="topbar">
+        <div class="topbar-left">
+          <div class="topbar-title-wrap">
+            <p class="eyebrow">ENGLISH READER</p>
+            <h1 id="articleTitle" contenteditable="true">The Art of Paying Attention</h1>
+          </div>
+          <!-- IMMERSIVE READING SWITCH (Left side of Reader) -->
+          <div class="immersive-switch-wrap" id="immersiveSwitchWrap">
+            <label class="immersive-toggle-label" id="topbarImmersiveToggle" for="toggleImmersiveCheck" title="开启沉浸式专注阅读：隐藏侧边栏、工具条与全部干扰元素，纯享文本内容 (快捷键: I 或 Esc)">
+              <input type="checkbox" id="toggleImmersiveCheck" class="immersive-toggle-checkbox" />
+              <span class="immersive-toggle-slider"><span class="immersive-slider-knob"></span></span>
+              <span class="immersive-toggle-text"><span class="immersive-icon">🕯️</span> 沉浸阅读</span>
+            </label>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button class="model-badge-btn" id="currentModelBadge" title="点击切换或配置大模型">⚡ <span id="currentModelLabel">内置 Gemini 3.8</span></button>
+          <button class="outline-btn" id="toggleParaNum" title="调整自然段序号标注大小与明显程度">¶ 段号: 清晰</button>
+          <button class="outline-btn" id="openPdfReader">导入 PDF</button>
+          <button class="outline-btn" id="togglePdfView" title="切换至原版排版与声画同步播放模式">🎧 原版播放</button>
+          <button class="outline-btn" id="toggleBilingual" title="开启逐段双语对照">⇄ 双语对照</button>
+          <button class="outline-btn" id="openSimplify" title="按 CEFR 等级改写降级">⊚ 改写降级</button>
+          <button class="outline-btn" id="openQuiz" title="生成随堂小测验">✦ 随堂测验</button>
+          <button class="icon-btn" id="editText" title="编辑文本">✎</button>
+          <button class="icon-btn" id="clearMarks" title="清除标记">⌫</button>
+          <button class="primary-btn" id="speakArticle">▶ 听全文</button>
+          <button class="outline-btn toggle-panel-header-btn" id="togglePanelBtn" title="收起/展开右侧功能区 (快捷键: ])">◨ 功能区</button>
+        </div>
+      </header>
+
+      <!-- FLOATING SELECTION BUBBLE -->
+      <div id="selectionBubble" class="selection-bubble" style="display:none;">
+        <div class="bubble-content">
+          <div class="bubble-preview">
+            <span class="bubble-word" id="bubbleWord"></span>
+            <span class="bubble-meaning" id="bubbleMeaning">查询中…</span>
+          </div>
+          <div class="bubble-actions">
+            <button id="bubbleSpeak" class="bubble-btn" title="朗读发音">🔊 发音</button>
+            <button id="bubbleGrammar" class="bubble-btn" title="语法骨架拆解">⌘ 语法</button>
+            <button id="bubbleSave" class="bubble-btn" title="加入生词本">＋ 收藏</button>
+            <button id="bubbleNote" class="bubble-btn" title="为所选词句记录笔记">✎ 笔记</button>
+            <button id="bubbleAskAI" class="bubble-btn" title="向 AI 伴读提问">💬 问答</button>
+          </div>
+        </div>
+        <div class="bubble-arrow"></div>
+      </div>
+
+      <div class="reader-layout" id="readerLayout">
+        <article class="paper">
+          <div class="article-meta">
+            <span id="articleMetaText">ESSAY · 5 MIN READ</span>
+            <span id="readingProgress">0% READ</span>
+          </div>
+          <div id="articleContent" class="article-content" contenteditable="false">
+            <p>In an age of endless notifications, attention has become one of our most valuable possessions. We give it away in small pieces: to a bright screen, a familiar sound, or the faint promise of something new.</p>
+            <p>Yet attention is more than a resource to be managed. It is a way of meeting the world. When we notice the light moving across a wall, or listen fully to a friend's story, ordinary moments begin to reveal their texture.</p>
+            <p>The practice is surprisingly simple, though not always easy. Choose one thing. Stay with it. When your mind wanders—as it naturally will—gently bring it back. Each return is not a failure, but a small act of care.</p>
+            <p>Over time, this kind of attention changes what we see. The world does not become quieter; we simply become better at hearing its many voices.</p>
+          </div>
+          <!-- ORIGINAL PLAYBACK CONTAINER -->
+          <div id="originalPlaybackContainer" class="original-playback-container" hidden>
+            <div class="orig-player-bar">
+              <div class="orig-status-wrap">
+                <span class="orig-pulse-dot"></span>
+                <div class="orig-status-info">
+                  <span class="orig-status-title">原版声画同步播放</span>
+                  <span class="orig-status-sub" id="origPlayStatusSub">排版原版 · 点击单词即可点读跟随</span>
+                </div>
+              </div>
+              <div class="orig-player-center">
+                <button class="orig-ctrl-btn" id="origPrevParaBtn" title="上一段 (快捷键: [)">⏮</button>
+                <button class="orig-ctrl-btn primary" id="origPlayToggleBtn" title="播放 / 暂停 (快捷键: 空格键)">▶ 播放原版</button>
+                <button class="orig-ctrl-btn" id="origNextParaBtn" title="下一段 (快捷键: ])">⏭</button>
+                <span class="orig-progress-pill" id="origProgressBadge">第 1 / 4 段</span>
+                <button class="orig-ctrl-btn" id="origReplayBtn" title="从头重播全文">↺ 从头播</button>
+                <div class="orig-speed-wrap">
+                  <span class="orig-speed-label">语速</span>
+                  <select id="origSpeedSelect" class="orig-speed-select">
+                    <option value="0.75">0.75×</option>
+                    <option value="0.9">0.9×</option>
+                    <option value="1" selected>1.0×</option>
+                    <option value="1.25">1.25×</option>
+                    <option value="1.5">1.5×</option>
+                  </select>
+                </div>
+                <div id="origPageNavWrap" class="orig-page-nav-wrap" style="display:none;">
+                  <button class="orig-nav-btn" id="origPrevPageBtn" title="上一页">◀ 上一页</button>
+                  <span id="origPageIndicator" class="orig-page-indicator">第 1 / 1 页</span>
+                  <button class="orig-nav-btn" id="origNextPageBtn" title="下一页">下一页 ▶</button>
+                </div>
+              </div>
+              <div class="orig-player-actions">
+                <button class="orig-sub-btn" id="origImportMediaBtn" title="上传/绑定原版音频或PDF">♬ 导入音频</button>
+                <button class="orig-sub-btn exit-btn" id="origExitBtn" title="返回标准学习版阅读">📖 返回学习版</button>
+              </div>
+            </div>
+
+            <!-- PDF Original Visual Stage (rendered when PDF is loaded) -->
+            <div id="pdfPreview" class="pdf-preview" style="display:none;"></div>
+
+            <!-- Editorial / Magazine Layout Original Stage (when reading standard articles) -->
+            <div id="originalEditorialView" class="original-editorial-view">
+              <div class="orig-editorial-masthead">
+                <div class="orig-masthead-rule"></div>
+                <div class="orig-masthead-label">ORIGINAL ARCHIVE EDITION · 声画同步原版</div>
+                <h1 id="origEditorialTitle" class="orig-editorial-title"></h1>
+                <div id="origEditorialMeta" class="orig-editorial-meta">THE ESSAY TRANSCRIPT · 原文字句声画同步</div>
+                <div class="orig-masthead-rule-double"></div>
+              </div>
+              <div id="origEditorialContent" class="orig-editorial-content"></div>
+            </div>
+          </div>
+          <footer class="article-footer">
+            <span>单击单词查词发音 · 双击段落整段朗读 · 划选短语句子语法拆解</span>
+            <span>·</span>
+            <span id="footerShortcutTip"><a href="#settings" class="footer-settings-link" id="footerShortcutLink">按键与手势指南 ↗</a></span>
+          </footer>
+        </article>
+
+        <!-- STUDY PANEL (Collapsible with Full Legacy Feature Dock) -->
+        <aside class="study-panel" id="studyPanel">
+          <!-- Collapsed Slim Vertical Dock Strip -->
+          <div class="study-panel-collapsed-dock" id="studyPanelCollapsedDock">
+            <button type="button" class="dock-expand-toggle-btn" id="expandStudyPanelBtn" title="展开右侧功能区 (快捷键: ])">
+              <span>❮</span>
+            </button>
+            <div class="dock-items-list">
+              <button type="button" class="dock-nav-item active" data-panel="translate" title="词句翻译 & 语法分析">
+                <span class="dock-icon">📖</span>
+                <span class="dock-text">翻译</span>
+              </button>
+              <button type="button" class="dock-nav-item" data-panel="notes" title="文章笔记">
+                <span class="dock-icon">✎</span>
+                <span class="dock-text">笔记</span>
+                <b class="dock-badge" id="dockNoteCount">0</b>
+              </button>
+              <button type="button" class="dock-nav-item" data-panel="ai-tutor" title="AI 伴读助教">
+                <span class="dock-icon">🤖</span>
+                <span class="dock-text">伴读</span>
+              </button>
+              <button type="button" class="dock-nav-item" data-panel="tools" title="学习工具箱 (CEFR/测验/双语/原版)">
+                <span class="dock-icon">✦</span>
+                <span class="dock-text">工具</span>
+              </button>
+              <button type="button" class="dock-nav-item" data-panel="vocab" title="生词速览">
+                <span class="dock-icon">★</span>
+                <span class="dock-text">生词</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Expanded Full Content Area -->
+          <div class="study-panel-body" id="studyPanelBody">
+            <div class="panel-header-bar">
+              <div class="panel-tabs">
+                <button class="tab active" data-panel="translate" title="词句翻译与语法结构">翻译</button>
+                <button class="tab" data-panel="notes" title="当前文章笔记">笔记 <b id="noteCount">0</b></button>
+                <button class="tab" data-panel="ai-tutor" title="AI 伴读答疑">AI 伴读</button>
+                <button class="tab" data-panel="tools" title="实用功能工具箱">工具箱</button>
+                <button class="tab" data-panel="vocab" title="生词速览">生词</button>
+              </div>
+              <button type="button" class="panel-collapse-btn" id="collapseStudyPanelBtn" title="收起功能区，让阅读正文占满全屏 (快捷键: ])">
+                <span>❯</span>
+              </button>
+            </div>
+
+            <!-- 1. TRANSLATE PANEL -->
+            <div id="translatePanel" class="panel-content active">
+              <!-- TRANSLATION ENGINE SWITCHER -->
+              <div class="translate-engine-bar" id="translateEngineBar">
+                <span class="engine-bar-label">引擎</span>
+                <div class="engine-pills-group">
+                  <button type="button" class="engine-pill active" id="enginePillWeb" data-engine="web" title="内置联网快速翻译器：免API、快速稳定，无需消耗大模型 Token">🌐 联网翻译 (默认)</button>
+                  <button type="button" class="engine-pill" id="enginePillLlm" data-engine="llm" title="AI 大模型深度翻译：适合长难句深度学术剖析与意译">🤖 AI 大模型 (可选)</button>
+                </div>
+              </div>
+
+              <div class="empty-state" id="translationEmpty">
+                <div class="empty-icon">Aa</div>
+                <h3>从文本中选择内容</h3>
+                <p>划选一个单词、词组或句子<br>即可在这里查看翻译与语法结构</p>
+              </div>
+              <div id="translationResult" hidden>
+                <div class="selected-header-row">
+                  <div class="selected-label">SELECTED TEXT</div>
+                  <span id="translationEngineBadge" class="engine-badge">🌐 联网极速翻译</span>
+                </div>
+                <blockquote id="selectedText"></blockquote>
+                <div class="translation-label">中文释义</div>
+                <p id="translatedText" class="translation"></p>
+                <div id="wordDetails" class="word-details"></div>
+                <div class="result-actions">
+                  <button id="speakSelection">◖ 朗读</button>
+                  <button id="analyzeGrammar">⌘ 语法解析</button>
+                  <button id="saveWord">＋ 收藏</button>
+                  <button id="addSelectionNote">✎ 记笔记</button>
+                </div>
+                <div id="grammarResult" class="grammar-result" hidden>
+                  <div class="grammar-header">
+                    <div class="grammar-title">
+                      <span>⌘</span> 句子语法骨架深度剖析
+                    </div>
+                    <div class="grammar-header-actions">
+                      <button type="button" class="grammar-action-btn" id="expandGrammarModalBtn" title="全屏独立视窗查看，绝不遮挡">⤢ 放大查看</button>
+                      <button type="button" class="grammar-action-btn" id="closeGrammarResultBtn" title="收起语法剖析">✕</button>
+                    </div>
+                  </div>
+                  <div id="grammarContent" class="grammar-content"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 2. NOTES PANEL -->
+            <div id="notesPanel" class="panel-content">
+              <div class="notes-panel-header">
+                <span class="notes-filter-label">当前文本笔记</span>
+                <button class="primary-btn note-add-trigger" id="addNote">＋ 新建笔记</button>
+              </div>
+              <div id="notesList" class="notes-list"></div>
+            </div>
+
+            <!-- 3. AI TUTOR PANEL -->
+            <div id="aiTutorPanel" class="panel-content">
+              <div class="ai-tutor-container">
+                <div class="ai-quick-prompts">
+                  <button class="quick-prompt-btn" data-ask="请概括这篇文章的核心主旨与作者的核心论点。">💡 概括文章核心主旨</button>
+                  <button class="quick-prompt-btn" data-ask="请提炼出本文中最地道、最值得学习积累的3个英文短语表达及例句。">✨ 提取核心地道表达</button>
+                  <button class="quick-prompt-btn" data-ask="这篇文章中有哪些值得注意的长难句或特殊语法现象？请作简要拆解。">🔍 重点句型与难点答疑</button>
+                </div>
+                <div id="aiMessagesList" class="ai-messages-list">
+                  <div class="ai-msg assistant">你好！我是你的英文专属阅读伴读助教。你可以点击上方快捷问题，或针对当前选中的句子直接向我提问！</div>
+                </div>
+                <div class="ai-input-box">
+                  <input id="aiQuestionInput" type="text" placeholder="向伴读助教提问…" />
+                  <button id="aiSendBtn" class="primary-btn">发送</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 4. TOOLS PANEL (学习工具箱：汇集前几版实用功能) -->
+            <div id="toolsPanel" class="panel-content">
+              <div class="tools-panel-header">
+                <span class="tools-panel-title">✦ 学习工具箱</span>
+                <span class="tools-panel-sub">阅读增强与学习辅助功能集合</span>
+              </div>
+              <div class="tools-cards-grid">
+                <!-- Tool 1: CEFR Simplify -->
+                <div class="tool-feature-card">
+                  <div class="tool-card-icon">⊚</div>
+                  <div class="tool-card-content">
+                    <div class="tool-card-title-row">
+                      <h4>CEFR 难度改写降级</h4>
+                      <span class="tool-card-badge" id="toolCardLevelBadge">原文</span>
+                    </div>
+                    <p class="tool-card-desc">针对生词长难句进行难度自适应改写，降级为 A2/B1/B2/C1 便于轻松精读。</p>
+                    <div class="tool-card-actions">
+                      <button type="button" class="tool-action-btn primary" id="panelToolSimplify">调整难度等级</button>
+                      <button type="button" class="tool-action-btn" id="panelRestoreOriginal">↺ 恢复原版</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Tool 2: Quiz -->
+                <div class="tool-feature-card">
+                  <div class="tool-card-icon">✦</div>
+                  <div class="tool-card-content">
+                    <h4>随堂阅读测验</h4>
+                    <p class="tool-card-desc">基于当前文本提炼 3 道单选题，即时检验阅读理解与生词掌握情况。</p>
+                    <div class="tool-card-actions">
+                      <button type="button" class="tool-action-btn primary" id="panelToolQuiz">生成随堂小测</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Tool 3: Bilingual Switch -->
+                <div class="tool-feature-card">
+                  <div class="tool-card-icon">⇄</div>
+                  <div class="tool-card-content">
+                    <div class="tool-card-title-row">
+                      <h4>逐段双语对照</h4>
+                      <span class="tool-card-status" id="panelBilingualStatus">已关闭</span>
+                    </div>
+                    <p class="tool-card-desc">段落下直接呈现精校中文翻译（预先极速缓存），扫读理解更流畅。</p>
+                    <div class="tool-card-actions">
+                      <button type="button" class="tool-action-btn" id="panelToolBilingual">切换双语对照</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Tool 4: Para Numbering Mode -->
+                <div class="tool-feature-card">
+                  <div class="tool-card-icon">¶</div>
+                  <div class="tool-card-content">
+                    <div class="tool-card-title-row">
+                      <h4>自然段序号模式</h4>
+                      <span class="tool-card-status" id="panelParaNumStatus">清晰</span>
+                    </div>
+                    <p class="tool-card-desc">段首标注段落序号，便于精读定位与笔记引用。</p>
+                    <div class="tool-card-actions">
+                      <button type="button" class="tool-action-btn" id="panelToolParaNum">切换显示样式</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Tool 5: Original Playback Mode -->
+                <div class="tool-feature-card">
+                  <div class="tool-card-icon">🎧</div>
+                  <div class="tool-card-content">
+                    <h4>原版排版声画同步</h4>
+                    <p class="tool-card-desc">排版原貌与高保真朗读跟随，体验杂志原版视听双轨输入。</p>
+                    <div class="tool-card-actions">
+                      <button type="button" class="tool-action-btn" id="panelToolPdfView">切换原版播放模式</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Tool 6: Speech & Editor Quick Actions -->
+                <div class="tool-feature-card">
+                  <div class="tool-card-icon">⚙️</div>
+                  <div class="tool-card-content">
+                    <h4>正文管理与朗读</h4>
+                    <p class="tool-card-desc">快速朗读整篇文本、编辑文章内容或重置划词高亮标记。</p>
+                    <div class="tool-card-actions">
+                      <button type="button" class="tool-action-btn" id="panelToolSpeakAll">▶ 全文朗读</button>
+                      <button type="button" class="tool-action-btn" id="panelToolEditArticle">✎ 编辑正文</button>
+                      <button type="button" class="tool-action-btn" id="panelToolClearMarks">⌫ 清除标记</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 5. VOCAB PANEL (生词速览与抽查) -->
+            <div id="vocabPanel" class="panel-content">
+              <div class="vocab-panel-header">
+                <div>
+                  <span class="vocab-panel-title">★ 已收藏生词</span>
+                  <span class="vocab-panel-count"><b id="panelVocabCount">0</b> 词</span>
+                </div>
+                <button type="button" class="outline-btn small" id="panelGoWordsView">生词库 ↗</button>
+              </div>
+              <div class="vocab-panel-search">
+                <input type="text" id="panelVocabSearch" placeholder="搜索已收藏生词…" />
+              </div>
+              <div id="panelVocabList" class="panel-vocab-list"></div>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <!-- AUDIO PLAYER (Streamlined Minimalist Capsule with Progress & Collapse) -->
+      <div id="audioPlayer" class="audio-player" hidden>
+        <!-- Collapsed Mini Trigger (Shown when collapsed) -->
+        <div id="playerCollapsedDock" class="player-collapsed-dock" style="display:none;">
+          <div class="voice-wave active mini-wave" id="miniVoiceWave"><span></span><span></span><span></span></div>
+          <span id="miniPlayStatus" class="mini-play-status">播放中</span>
+          <button id="miniTogglePlay" class="mini-play-btn" title="播放 / 暂停">▶</button>
+          <button id="expandPlayerBtn" class="mini-expand-btn" title="展开完整控制面板">▲ 展开</button>
+        </div>
+
+        <!-- Expanded Full Player Elements -->
+        <div class="player-full-content" id="playerFullContent">
+          <div class="player-status-group">
+            <div class="voice-wave" id="voiceWaveIndicator" title="语音状态">
+              <span></span><span></span><span></span>
+            </div>
+            <span id="nowSpeaking" class="now-speaking-text">准备就绪</span>
+          </div>
+
+          <!-- Draggable Progress Bar (Active for imported audio and paragraphs) -->
+          <div class="player-progress-container" id="playerProgressContainer">
+            <span class="player-time-label" id="playerCurrentTime">00:00</span>
+            <div class="player-slider-wrap">
+              <input type="range" id="audioProgressBar" class="player-progress-bar" min="0" max="100" value="0" step="0.1" title="拖拽跳转播放进度" />
+            </div>
+            <span class="player-time-label" id="playerTotalTime">00:00</span>
+          </div>
+
+          <div class="player-controls">
+            <button id="skipBack" class="player-icon-btn" title="后退 10 词 / 5 秒 (快捷键: ←)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 19 2 12 11 5 11 19"></polygon><polygon points="22 19 13 12 22 5 22 19"></polygon></svg>
+            </button>
+            <button id="togglePlay" class="play-toggle-btn" title="播放 / 暂停 (快捷键: 空格键)">▶</button>
+            <button id="skipForward" class="player-icon-btn" title="快进 10 词 / 5 秒 (快捷键: →)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 19 22 12 13 5 13 19"></polygon><polygon points="2 19 11 12 2 5 2 19"></polygon></svg>
+            </button>
+          </div>
+          <div class="player-tools-group">
+            <div class="player-pill-select" title="发音口音">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+              <select id="voiceAccent">
+                <option value="en-US">美音</option>
+                <option value="en-GB">英音</option>
+                <option value="en-AU">澳音</option>
+                <option value="en-CA">加音</option>
+                <option value="en-IE">爱尔兰</option>
+              </select>
+            </div>
+            <div class="player-pill-select" title="朗读语速">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+              <select id="playbackRate">
+                <option value="0.5">0.5×</option>
+                <option value="0.8">0.8×</option>
+                <option value="1" selected>1.0×</option>
+                <option value="1.2">1.2×</option>
+                <option value="1.5">1.5×</option>
+                <option value="2">2.0×</option>
+              </select>
+            </div>
+            <button id="importAudio" class="player-tool-btn" title="导入配套音频文件">♬</button>
+            <button id="calibrateAudio" class="player-tool-btn" title="逐词校准">◎</button>
+            <button id="toggleCollapsePlayer" class="player-tool-btn player-collapse-btn" title="收起为迷你悬浮条">▼</button>
+            <button id="closePlayerBtn" class="player-tool-btn player-close-btn" title="停止朗读并关闭播放器">✕</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- LIBRARY VIEW -->
+    <section id="library" class="view">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">YOUR LIBRARY</p>
+          <h1>我的文本</h1>
+        </div>
+        <div class="header-actions">
+          <button class="outline-btn" id="importText">导入文件</button>
+          <button class="primary-btn" id="newText">＋ 新建文本</button>
+        </div>
+      </header>
+      <div id="libraryList" class="library-list"></div>
+    </section>
+
+    <!-- VOCABULARY VIEW -->
+    <section id="words" class="view">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">VOCABULARY</p>
+          <h1>生词本</h1>
+        </div>
+        <div class="header-actions">
+          <button class="outline-btn" id="openFlashcards">🗂 闪卡复习</button>
+          <button class="outline-btn" id="exportWords">导出生词</button>
+        </div>
+      </header>
+      <div id="wordList" class="word-list"></div>
+    </section>
+
+    <!-- SETTINGS VIEW -->
+    <section id="settings" class="view">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">PREFERENCES</p>
+          <h1>大模型与系统设置</h1>
+        </div>
+      </header>
+      <div class="settings-card">
+        <div class="api-status-badge" id="settingsStatusBadge">
+          <span>●</span> <span id="settingsStatusText">当前引擎：内置 Gemini 3.8 Flash 已就绪</span>
+        </div>
+
+        <!-- Translation Engine Preference -->
+        <div class="settings-section-block">
+          <h2>翻译引擎首选项</h2>
+          <p>日常划词与句段释义的默认处理引擎（大模型翻译为可选项）：</p>
+          <div class="engine-cards-grid">
+            <label class="engine-pref-card active" id="cardPrefWeb">
+              <input type="radio" name="transEnginePref" value="web" checked />
+              <div class="pref-card-body">
+                <div class="pref-card-header">
+                  <span class="pref-card-icon">🌐</span>
+                  <span class="pref-card-title">联网极速翻译器</span>
+                  <span class="pref-card-badge">默认推荐</span>
+                </div>
+                <p class="pref-card-desc">自动连网多源在线翻译词库，毫秒级响应，无需消耗大模型 Token，稳定准确，适合高频查词与顺畅通读。</p>
+              </div>
+            </label>
+            <label class="engine-pref-card" id="cardPrefLlm">
+              <input type="radio" name="transEnginePref" value="llm" />
+              <div class="pref-card-body">
+                <div class="pref-card-header">
+                  <span class="pref-card-icon">🤖</span>
+                  <span class="pref-card-title">AI 大模型深度翻译</span>
+                  <span class="pref-card-badge optional">可选项</span>
+                </div>
+                <p class="pref-card-desc">调用已配置的大模型进行语境推敲、长难句意译与精读赏析，提供更具文学与学术质感的高阶翻译。</p>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Reader Interaction & Shortcuts Guide -->
+        <div class="settings-section-block" id="settingsShortcutsGuide">
+          <h2>📖 阅读交互与播放快捷键指南</h2>
+          <p>系统已精简播放器界面，快捷按键与高频手势整理如下，随时查阅：</p>
+          <div class="shortcuts-guide-grid">
+            <div class="shortcut-card">
+              <div class="shortcut-card-header">
+                <span class="shortcut-icon">⌨️</span>
+                <span class="shortcut-title">键盘快捷键</span>
+              </div>
+              <div class="shortcut-rows-list">
+                <div class="shortcut-row">
+                  <kbd class="kbd-badge">Space 空格键</kbd>
+                  <span class="kbd-desc">播放 / 暂停语音朗读与原版音频</span>
+                </div>
+                <div class="shortcut-row">
+                  <kbd class="kbd-badge">← 方向左键</kbd>
+                  <span class="kbd-desc">后退 10 个词 (或音频快退 5 秒)</span>
+                </div>
+                <div class="shortcut-row">
+                  <kbd class="kbd-badge">→ 方向右键</kbd>
+                  <span class="kbd-desc">快进 10 个词 (或音频快进 5 秒)</span>
+                </div>
+                <div class="shortcut-row">
+                  <kbd class="kbd-badge">Esc 退出键</kbd>
+                  <span class="kbd-desc">停止当前播放并收起高亮与播放条</span>
+                </div>
+              </div>
+            </div>
+            <div class="shortcut-card">
+              <div class="shortcut-card-header">
+                <span class="shortcut-icon">👆</span>
+                <span class="shortcut-title">鼠标与点读手势</span>
+              </div>
+              <div class="shortcut-rows-list">
+                <div class="shortcut-row">
+                  <kbd class="kbd-badge">单击单词</kbd>
+                  <span class="kbd-desc">权威音标发音、精准释义与语境剖析</span>
+                </div>
+                <div class="shortcut-row">
+                  <kbd class="kbd-badge">双击单词 / 段落</kbd>
+                  <span class="kbd-desc">从当前段落/该词开始朗读整段内容</span>
+                </div>
+                <div class="shortcut-row">
+                  <kbd class="kbd-badge">播放中点击单词</kbd>
+                  <span class="kbd-desc">立即声画精准跳播至所选单词</span>
+                </div>
+                <div class="shortcut-row">
+                  <kbd class="kbd-badge">划选短语句子</kbd>
+                  <span class="kbd-desc">弹出极简气泡：语法拆解与 AI 答疑</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-divider"></div>
+
+        <h2>选择伴读与高阶大模型</h2>
+        <p>用于 AI 伴读答疑、改写降级、测验生成与高阶语法骨架剖析：</p>
+
+        <!-- Provider Switcher -->
+        <div class="provider-selector">
+          <button class="provider-btn active" data-provider="gemini">
+            <span class="p-icon">🌟</span>
+            <span class="p-name">系统内置 (Gemini)</span>
+            <span class="p-tag">免配置·推荐</span>
+          </button>
+          <button class="provider-btn" data-provider="deepseek">
+            <span class="p-icon">🐋</span>
+            <span class="p-name">DeepSeek</span>
+            <span class="p-tag">V3 / R1 推理</span>
+          </button>
+          <button class="provider-btn" data-provider="qwen">
+            <span class="p-icon">☁️</span>
+            <span class="p-name">通义千问 (Qwen)</span>
+            <span class="p-tag">阿里百炼</span>
+          </button>
+          <button class="provider-btn" data-provider="custom">
+            <span class="p-icon">🌐</span>
+            <span class="p-name">自定义 / 兼容接口</span>
+            <span class="p-tag">Kimi / GLM 等</span>
+          </button>
+        </div>
+
+        <!-- Quick Model Presets -->
+        <div id="modelPresetsContainer" class="model-presets-row" style="display:none;">
+          <span style="font-size:12px;color:var(--muted);font-family:'DM Mono';">常用模型：</span>
+          <div id="presetChips" class="preset-chips"></div>
+        </div>
+
+        <div id="customConfigFields" class="custom-config-fields" style="display:none;">
+          <label>API 接口地址
+            <input id="apiUrl" placeholder="https://api.deepseek.com/chat/completions" />
+          </label>
+          <label>API Key
+            <div class="password-input-wrap">
+              <input id="apiKey" type="password" placeholder="sk-..." />
+              <button type="button" id="toggleKeyVisibility" class="toggle-eye-btn" title="显示/隐藏密钥">👁</button>
+            </div>
+            <small id="providerKeyHint" class="input-hint">请前往对应大模型开放平台控制台获取 API Key</small>
+          </label>
+          <label>模型标识 (Model Name)
+            <input id="modelName" placeholder="deepseek-chat" />
+          </label>
+        </div>
+
+        <div id="connectionResultBox" class="connection-result-box" style="display:none;"></div>
+
+        <div class="settings-actions">
+          <button class="outline-btn" id="testConnectionBtn">⚡ 测试接口连接</button>
+          <button class="outline-btn" id="resetDefaultBtn">恢复内置模型</button>
+          <button class="primary-btn" id="saveSettings">保存并生效</button>
+        </div>
+        <p class="settings-hint">无论您选择哪个模型，系统均具备智能重试与离线备用词典保障，确保阅读查词不断连。</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- MODALS -->
+  <!-- Editor Dialog -->
+  <dialog id="editorDialog">
+    <form method="dialog" class="editor">
+      <div class="modal-head">
+        <h2>编辑与导入文本</h2>
+        <button value="cancel" class="icon-btn">×</button>
+      </div>
+      <label>标题
+        <input id="editorTitle" />
+      </label>
+
+      <!-- Text Quality / Auto-Repair Toolbar -->
+      <div class="editor-repair-bar">
+        <div class="repair-bar-left">
+          <span class="repair-bar-title">🔍 文本质量诊断与修复：</span>
+          <span id="textIssueSummary" class="text-issue-summary">未检测到异常</span>
+        </div>
+        <div class="repair-bar-actions">
+          <button type="button" id="detectTextErrorsBtn" class="repair-action-btn" title="重新检测断词、乱码、折行截断与标点缺陷">
+            ⚡ 重新检测
+          </button>
+          <button type="button" id="autoRepairTextBtn" class="repair-action-btn primary-repair-btn" title="毫秒级智能修复换行断词、连词标点、连字符与排版乱码">
+            ✨ 一键智能修复
+          </button>
+          <button type="button" id="aiRepairTextBtn" class="repair-action-btn ai-repair-btn" title="通过 AI 大模型重构段落流、复杂折行与格式">
+            🤖 AI 深度精修
+          </button>
+          <button type="button" id="undoRepairBtn" class="repair-action-btn undo-repair-btn" title="撤销本次修复，恢复原始内容" style="display:none;">
+            ↺ 撤销
+          </button>
+        </div>
+      </div>
+
+      <div id="repairSuggestionsBox" class="repair-suggestions-box" style="display:none;"></div>
+
+      <label>英文正文
+        <textarea id="editorBody" rows="13" placeholder="在此粘贴或输入英文文章内容…"></textarea>
+      </label>
+      <div class="modal-actions">
+        <button value="cancel" class="outline-btn">取消</button>
+        <button id="saveArticle" value="default" class="primary-btn">保存并阅读</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- CEFR Simplification Dialog -->
+  <dialog id="simplifyDialog" class="custom-modal">
+    <div class="modal-head">
+      <h2>CEFR 难度改写降级</h2>
+      <button id="closeSimplifyBtn" class="icon-btn">×</button>
+    </div>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 12px;">选择目标欧标等级，AI 将保留文章核心主旨，同时将难词长句改写为更易阅读理解的表达：</p>
+    <div class="cefr-chips">
+      <div class="cefr-chip" data-level="A2">
+        <b>A2 初级</b>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px;">常用简单句与高频核心词</div>
+      </div>
+      <div class="cefr-chip active" data-level="B1">
+        <b>B1 中级</b>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px;">适度复合句与地道短语</div>
+      </div>
+      <div class="cefr-chip" data-level="B2">
+        <b>B2 进阶</b>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px;">书面丰富表达与适度从句</div>
+      </div>
+    </div>
+    <div id="simplifyStatus" style="font-size:12px;color:#2457d6;margin:10px 0;"></div>
+    <div id="simplifyResultBox" class="diff-box" style="display:none;"></div>
+    <div class="modal-actions">
+      <button id="restoreOriginalBtn" class="outline-btn" style="margin-right:auto;display:none;">恢复最初原文</button>
+      <button id="cancelSimplifyBtn" class="outline-btn">关闭</button>
+      <button id="applySimplifyBtn" class="primary-btn" disabled>确认替换为改写版</button>
+    </div>
+  </dialog>
+
+  <!-- Quiz Dialog -->
+  <dialog id="quizDialog" class="custom-modal">
+    <div class="modal-head">
+      <h2>随堂理解与词汇小测</h2>
+      <button id="closeQuizBtn" class="icon-btn">×</button>
+    </div>
+    <div id="quizContainer" style="max-height:60vh;overflow-y:auto;padding-right:4px;">
+      <p style="font-size:13px;color:var(--muted);">正在根据本文内容生成随堂小测验…</p>
+    </div>
+    <div class="modal-actions">
+      <button id="regenerateQuizBtn" class="outline-btn">重新生成</button>
+      <button id="finishQuizBtn" class="primary-btn">完成测验</button>
+    </div>
+  </dialog>
+
+  <!-- Flashcard Dialog -->
+  <dialog id="flashcardDialog" class="custom-modal">
+    <div class="modal-head">
+      <h2>生词闪卡复习</h2>
+      <button id="closeFlashcardBtn" class="icon-btn">×</button>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);">
+      <span id="flashcardProgress">卡片 1 / 1</span>
+      <span>点击卡片任意处翻转查看释义</span>
+    </div>
+    <div class="flashcard-stage" id="flashcardStage">
+      <div class="flashcard-inner" id="flashcardInner">
+        <div class="flashcard-face flashcard-front">
+          <div class="flashcard-word" id="fcWord">word</div>
+          <div class="flashcard-phonetic" id="fcPhonetic">/ ... /</div>
+          <button id="fcSpeakBtn" class="outline-btn" style="margin-top:14px;">🔊 朗读发音</button>
+          <div class="flashcard-hint">点击翻转卡片 ↷</div>
+        </div>
+        <div class="flashcard-face flashcard-back">
+          <div class="flashcard-meaning" id="fcMeaning">中文释义</div>
+          <div id="fcExample" style="font-size:12px;color:#555;line-height:1.6;font-style:italic;"></div>
+          <div class="flashcard-hint">再次点击翻回正面</div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:center;gap:12px;margin-top:16px;">
+      <button id="fcPrevBtn" class="outline-btn">← 上一个</button>
+      <button id="fcRememberedBtn" class="outline-btn" style="border-color:#34a853;color:#137333;">✓ 已记住</button>
+      <button id="fcNextBtn" class="primary-btn">下一个 →</button>
+    </div>
+  </dialog>
+
+  <!-- Note Editor Dialog -->
+  <dialog id="noteEditDialog" class="custom-modal">
+    <div class="modal-head">
+      <h2 id="noteModalTitle">添加阅读笔记</h2>
+      <button id="closeNoteModalBtn" class="icon-btn">×</button>
+    </div>
+    <div class="note-modal-body">
+      <div id="noteContextQuote" class="note-context-quote" style="display:none;">
+        <span class="note-quote-label">关联原文 / 句子：</span>
+        <blockquote id="noteQuoteText"></blockquote>
+      </div>
+      <label class="field-label" style="margin-top:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+          <span>笔记或心得感悟</span>
+          <button id="aiPolishNoteBtn" type="button" class="outline-btn ai-polish-trigger-btn">✨ AI 助教润色与语法纠错</button>
+        </div>
+        <textarea id="noteContentInput" class="note-textarea" rows="5" placeholder="记录你对此句的理解、短语拓展、语法体会或英文读后感…"></textarea>
+      </label>
+
+      <!-- AI Polish & Grammar Result Container -->
+      <div id="noteAiPolishBox" class="note-ai-polish-box" style="display:none;">
+        <div class="note-ai-polish-header">
+          <span class="ai-badge-label">✨ AI 助教批改建议</span>
+          <button id="closeAiPolishBoxBtn" type="button" class="icon-btn-tiny" title="收起建议">×</button>
+        </div>
+        <div id="noteAiPolishLoading" class="note-ai-loading" style="display:none;">
+          <div class="voice-pulse" style="display:inline-block;margin-right:6px;"></div>
+          <span>正在诊断语法拼写、优化句式并提炼地道英文…</span>
+        </div>
+        <div id="noteAiPolishContent" class="note-ai-content" style="display:none;">
+          <!-- Polished Version -->
+          <div class="polish-card-item">
+            <div class="polish-card-title">
+              <span>🎯 地道润色推荐</span>
+              <button id="adoptPolishedBtn" type="button" class="mini-adopt-btn">✓ 一键采纳替换</button>
+            </div>
+            <div id="polishResultText" class="polish-result-text"></div>
+          </div>
+          <!-- Grammar & Phrasing Review -->
+          <div class="polish-card-item">
+            <div class="polish-card-title">🔍 语法与表达诊断</div>
+            <div id="polishGrammarFeedback" class="polish-feedback-text"></div>
+          </div>
+          <!-- Advanced Vocabulary Suggestions -->
+          <div id="polishVocabBox" class="polish-card-item" style="display:none;">
+            <div class="polish-card-title">💡 高阶词汇与句型进阶</div>
+            <div id="polishVocabList" class="polish-vocab-tags"></div>
+          </div>
+          <!-- Tutor Encouragement -->
+          <div id="polishOverallComment" class="polish-tutor-note"></div>
+        </div>
+      </div>
+
+      <div class="note-modal-hints">
+        <span>💡 支持快捷键 Ctrl+Enter / Cmd+Enter 快速保存</span>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button id="cancelNoteModalBtn" class="outline-btn">取消</button>
+      <button id="saveNoteModalBtn" class="primary-btn">保存笔记</button>
+    </div>
+  </dialog>
+
+  <!-- Expanded Grammar Analysis Modal Dialog (Full Unobstructed View) -->
+  <dialog id="grammarModalDialog" class="modal-dialog grammar-modal-dialog">
+    <div class="modal-content grammar-modal-content">
+      <header class="modal-header">
+        <div class="modal-header-title">
+          <span class="modal-header-icon">⌘</span>
+          <h2>句子语法骨架与深度剖析（全屏模式）</h2>
+        </div>
+        <button class="close-modal-btn" id="closeGrammarModalBtn">×</button>
+      </header>
+      <div class="modal-body">
+        <div class="grammar-modal-quote-wrap">
+          <span class="quote-label">原文剖析语句</span>
+          <blockquote id="grammarModalQuote" class="grammar-modal-quote"></blockquote>
+        </div>
+        <div class="grammar-modal-body-wrap">
+          <div id="grammarModalBody" class="grammar-modal-body-content"></div>
+        </div>
+      </div>
+      <footer class="modal-actions">
+        <button class="primary-btn" id="closeGrammarModalOkBtn">确定并返回阅读</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <input id="textFileInput" type="file" accept=".txt,.pdf,text/plain,application/pdf" hidden />
+  <input id="audioFileInput" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg" hidden />
+
+  <!-- IMMERSIVE EXIT FLOATING HUD -->
+  <div id="immersiveFloatingExit" class="immersive-floating-exit" style="display:none;">
+    <button id="exitImmersiveBtn" class="exit-immersive-btn" title="退出沉浸模式 (快捷键: Esc 或 I)">
+      <span class="exit-icon">✕</span>
+      <span class="exit-label">退出沉浸阅读</span>
+      <kbd class="exit-kbd">Esc</kbd>
+    </button>
+  </div>
+
+  <script type="module" src="/src/app.ts"></script>
+</body>
+</html>

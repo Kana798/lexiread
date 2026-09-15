@@ -1,0 +1,6 @@
+{
+  "name": "AI English Reader",
+  "description": "LexiRead · 深度英语阅读器，集成即时划词释义、长难句语法拆解、全文语音朗读、PDF/音频导入、CEFR 分级改写与 AI 伴读。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
