@@ -1,7 +1,7 @@
 {
   "name": "react-example",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "LexiRead · 深度英语阅读器（本地优先，集成有道智云在线翻译）",
   "author": "LexiRead",
   "type": "module",

@@ -1,6 +1,9 @@
 # 依赖与构建产物
 node_modules/
-build/
+# build/ 是 electron-builder 的资源目录（build/icon.png 是应用图标，需入库），
+# 因此只忽略目录内容、保留例外文件
+build/*
+!build/icon.png
 dist/
 release/
 release-fixed/
