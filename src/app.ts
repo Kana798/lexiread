@@ -4,12 +4,30 @@ import { formPdfLine } from './pdf-extraction';
 import { pausePlaybackEngine, resumePlaybackEngine } from './playback-engine';
 import { diagnoseText as sharedDiagnoseText, repairText as sharedRepairText } from './text-quality';
 import { setOriginalStageVisibility } from './original-playback';
+import { parseEpub, chaptersToDocument } from './epub';
+import { scheduleSrsReview, buildReviewQueue, isDue, type ReviewRating } from './srs';
+
+// pdf.js ships with the app (no CDN): the reader must work offline.
+// The worker is inlined as source and turned into a blob URL because the
+// packaged app runs from file://, where normal worker file loading is blocked.
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerSource from 'pdfjs-dist/build/pdf.worker.min.js?raw';
 
 declare global {
   interface Window {
     pdfjsLib?: any;
   }
 }
+
+/** Configures pdf.js once, at module load. */
+function initPdfEngine() {
+  if (window.pdfjsLib) return;
+  const blob = new Blob([pdfWorkerSource], { type: 'application/javascript' });
+  pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
+  window.pdfjsLib = pdfjsLib;
+}
+
+initPdfEngine();
 
 const $ = (s: string) => document.querySelector(s) as any;
 const $$ = (s: string) => [...document.querySelectorAll(s)] as any[];
@@ -37,6 +55,11 @@ interface WordItem {
   meaning: string;
   phonetic?: string;
   example?: string;
+  // SRS (spaced repetition) scheduling — see scheduleSrsReview()
+  reviewCount?: number;   // how many times it has been reviewed
+  nextReviewAt?: number;  // epoch ms; due when <= now
+  intervalDays?: number;  // current interval in days
+  easeFactor?: number;    // FSRS-ish ease multiplier, starts at 2.5
 }
 
 interface NoteItem {
@@ -2084,20 +2107,25 @@ function renderLibrary() {
 function renderWords() {
   const container = $("#wordList");
   if (!container) return;
+  const now = Date.now();
   container.innerHTML = words.length
     ? words
-        .map(
-          (w, i) => `<article class="word-card">
+        .map((w, i) => {
+          const due = isDue(w, now);
+          const dueLabel = due
+            ? '<span class="word-due word-due-now">待复习</span>'
+            : `<span class="word-due">${srsNextLabel(w, now)}</span>`;
+          return `<article class="word-card">
             <div>
-              <h2>${escapeHtml(w.text)} <small style="font-size:13px;color:var(--muted);font-weight:normal;font-family:'DM Mono';">${w.phonetic ? escapeHtml(w.phonetic) : ""}</small></h2>
+              <h2>${escapeHtml(w.text)} <small style="font-size:13px;color:var(--muted);font-weight:normal;font-family:'DM Mono';">${w.phonetic ? escapeHtml(w.phonetic) : ""}</small>${dueLabel}</h2>
               <p>${escapeHtml(w.meaning)}</p>
             </div>
             <div style="display:flex;gap:8px;align-items:center;">
               <button data-speak="${escapeHtml(w.text)}" title="朗读" style="color:var(--blue);font-size:14px;">🔊</button>
               <button data-i="${i}" title="移除生词">×</button>
             </div>
-          </article>`
-        )
+          </article>`;
+        })
         .join("")
     : `<div class="empty-state">
         <div class="empty-icon">◇</div>
@@ -2899,15 +2927,7 @@ if ($("#exportWords")) {
 // PDF Support with High-Precision Text Reconstruction
 async function extractPdf(file: File) {
   if (!window.pdfjsLib) {
-    await new Promise((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-      s.onload = resolve;
-      s.onerror = reject;
-      document.head.appendChild(s);
-    });
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    throw new Error("PDF 引擎未加载，请重启应用后重试");
   }
   const doc = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
   const pageTexts: string[] = [];
@@ -3108,39 +3128,317 @@ if ($("#openPdfReader")) {
   };
 }
 
-async function renderPdfPreview() {
-  if (!activePdfDocument) return;
+// ==========================================
+// PDF Viewer — lazy rendering, zoom, page nav, in-document search
+//
+// Rendering every page up front froze the app on large documents, so pages are
+// laid out as sized placeholders first and painted only when they approach the
+// viewport (plus a one-screen buffer in each direction).
+// ==========================================
+let pdfZoom = 1;
+let pdfFitWidth = true;
+let pdfRenderToken = 0;
+const pdfRenderedPages = new Set<number>();
+let pdfPageBaseSize: Array<{ w: number; h: number }> = [];
+
+function pdfAvailableWidth(): number {
   const box = $("#pdfPreview");
-  if (!box) return;
-  box.innerHTML = '<p class="pdf-loading">正在渲染 PDF 原版页面…</p>';
+  return Math.max(320, (box?.clientWidth || 900) - 28);
+}
+
+function pdfTargetWidth(baseWidth: number): number {
+  return pdfFitWidth ? Math.min(baseWidth, pdfAvailableWidth()) : baseWidth * pdfZoom;
+}
+
+function updatePdfToolbar() {
+  const total = activePdfDocument?.numPages || 1;
+  const count = $("#pdfPageCount");
+  const zoom = $("#pdfZoomLabel");
+  const input = $("#pdfPageInput") as HTMLInputElement | null;
+  if (count) count.textContent = `/ ${total}`;
+  if (zoom) zoom.textContent = pdfFitWidth ? "适应宽度" : `${Math.round(pdfZoom * 100)}%`;
+  if (input) {
+    input.max = String(total);
+    if (!input.value) input.value = "1";
+  }
+}
+
+async function renderPdfPreview() {
+  const box = $("#pdfPreview");
+  if (!activePdfDocument || !box) return;
+  const token = ++pdfRenderToken;
+  pdfRenderedPages.clear();
+  pdfPageBaseSize = [];
+  box.innerHTML = "";
+
   for (let i = 1; i <= activePdfDocument.numPages; i++) {
     const page = await activePdfDocument.getPage(i);
     const base = page.getViewport({ scale: 1 });
-    const available = Math.max(320, box.clientWidth - 28);
-    const viewport = page.getViewport({ scale: Math.min(1.55, available / base.width) });
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d")!;
-    const wrap = document.createElement("figure");
-    const textLayer = document.createElement("div");
-    canvas.width = Math.ceil(viewport.width);
-    canvas.height = Math.ceil(viewport.height);
-    await page.render({ canvasContext: ctx, viewport }).promise;
-    wrap.innerHTML = `<figcaption>第 ${i} 页 · 原版布局（可直接划选文字）</figcaption>`;
-    textLayer.className = "pdf-text-layer";
-    textLayer.style.width = `${viewport.width}px`;
-    textLayer.style.height = `${viewport.height}px`;
-    wrap.append(canvas, textLayer);
-    box.append(wrap);
-    const task = window.pdfjsLib?.renderTextLayer({
-      textContentSource: page.streamTextContent(),
-      container: textLayer,
-      viewport,
-      textDivs: [],
-    });
-    if (task?.promise) await task.promise;
+    pdfPageBaseSize[i] = { w: base.width, h: base.height };
+    const width = pdfTargetWidth(base.width);
+    const height = width * (base.height / base.width);
+
+    const fig = document.createElement("figure");
+    fig.className = "pdf-page";
+    fig.dataset.page = String(i);
+    const cap = document.createElement("figcaption");
+    cap.textContent = `第 ${i} 页 · 原版布局（可直接划选文字）`;
+    const pending = document.createElement("div");
+    pending.className = "pdf-page-pending";
+    pending.style.width = `${Math.round(width)}px`;
+    pending.style.height = `${Math.round(height)}px`;
+    pending.textContent = "· · ·";
+    fig.append(cap, pending);
+    box.append(fig);
   }
-  box.querySelector(".pdf-loading")?.remove();
+
+  updatePdfToolbar();
+  await renderVisiblePdfPages(token);
 }
+
+async function renderVisiblePdfPages(token: number) {
+  const box = $("#pdfPreview");
+  if (!activePdfDocument || !box) return;
+  const viewTop = window.scrollY - 500;
+  const viewBottom = window.scrollY + window.innerHeight + 500;
+
+  const pages = Array.from(box.querySelectorAll(".pdf-page")) as HTMLElement[];
+  for (const fig of pages) {
+    if (token !== pdfRenderToken) return;
+    const pageNo = Number(fig.dataset.page);
+    if (pdfRenderedPages.has(pageNo)) continue;
+    const rect = fig.getBoundingClientRect();
+    const top = rect.top + window.scrollY;
+    const bottom = rect.bottom + window.scrollY;
+    if (bottom < viewTop || top > viewBottom) continue;
+    pdfRenderedPages.add(pageNo);
+    await renderPdfPage(pageNo, fig, token);
+    highlightPdfPageHits(fig);
+  }
+}
+
+async function renderPdfPage(pageNo: number, fig: HTMLElement, token: number) {
+  const page = await activePdfDocument.getPage(pageNo);
+  const base = pdfPageBaseSize[pageNo];
+  if (!base) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const cssScale = pdfTargetWidth(base.w) / base.w;
+  // canvas gets the device-pixel viewport; the text layer stays in CSS pixels
+  // so highlighted/selectable text lines up with what is drawn.
+  const cssViewport = page.getViewport({ scale: cssScale });
+  const renderViewport = page.getViewport({ scale: cssScale * dpr });
+
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d")!;
+  canvas.width = Math.ceil(renderViewport.width);
+  canvas.height = Math.ceil(renderViewport.height);
+  canvas.style.width = `${Math.round(cssViewport.width)}px`;
+  canvas.style.height = `${Math.round(cssViewport.height)}px`;
+
+  const textLayer = document.createElement("div");
+  textLayer.className = "pdf-text-layer";
+  textLayer.style.width = `${Math.round(cssViewport.width)}px`;
+  textLayer.style.height = `${Math.round(cssViewport.height)}px`;
+
+  const caption = fig.querySelector("figcaption");
+  fig.innerHTML = "";
+  if (caption) fig.append(caption);
+  fig.append(canvas, textLayer);
+
+  await page.render({ canvasContext: ctx, viewport: renderViewport }).promise;
+  if (token !== pdfRenderToken) return;
+  const task = window.pdfjsLib?.renderTextLayer({
+    textContentSource: page.streamTextContent(),
+    container: textLayer,
+    viewport: cssViewport,
+    textDivs: [],
+  });
+  if (task?.promise) await task.promise;
+}
+
+/** Re-lays out placeholders and repaints what is visible (zoom / resize). */
+async function refreshPdfLayout() {
+  const box = $("#pdfPreview");
+  if (!activePdfDocument || !box) return;
+  const token = ++pdfRenderToken;
+  pdfRenderedPages.clear();
+  const figs = Array.from(box.querySelectorAll(".pdf-page")) as HTMLElement[];
+  for (const fig of figs) {
+    const pageNo = Number(fig.dataset.page);
+    const base = pdfPageBaseSize[pageNo];
+    if (!base) continue;
+    const width = pdfTargetWidth(base.w);
+    const height = width * (base.h / base.w);
+    const canvas = fig.querySelector<HTMLElement>("canvas");
+    const pending = fig.querySelector<HTMLElement>(".pdf-page-pending");
+    const layer = fig.querySelector<HTMLElement>(".pdf-text-layer");
+    for (const el of [canvas, pending]) {
+      if (el) {
+        el.style.width = `${Math.round(width)}px`;
+        el.style.height = `${Math.round(height)}px`;
+      }
+    }
+    // the text layer shares the canvas box, otherwise selection drifts off text
+    if (layer) {
+      layer.style.width = `${Math.round(width)}px`;
+      layer.style.height = `${Math.round(height)}px`;
+    }
+  }
+  updatePdfToolbar();
+  // pages painted at the previous size have to be redrawn
+  pdfRenderedPages.clear();
+  await renderVisiblePdfPages(token);
+}
+
+// ---- in-document search -----------------------------------------------------
+let pdfFindQuery = "";
+let pdfFindPages: number[] = [];
+let pdfFindIndex = -1;
+
+function clearPdfHighlights(fig: HTMLElement) {
+  fig.querySelectorAll("mark.pdf-find-hit").forEach((m) => {
+    const parent = m.parentNode;
+    if (!parent) return;
+    parent.replaceChild(document.createTextNode(m.textContent || ""), m);
+    parent.normalize();
+  });
+}
+
+function highlightPdfPageHits(fig: HTMLElement) {
+  if (!pdfFindQuery) return;
+  clearPdfHighlights(fig);
+  const layer = fig.querySelector(".pdf-text-layer");
+  if (!layer) return;
+  const needle = pdfFindQuery.toLowerCase();
+  const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
+  let hits = 0;
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    const idx = node.data.toLowerCase().indexOf(needle);
+    if (idx === -1) continue;
+    const range = document.createRange();
+    range.setStart(node, idx);
+    range.setEnd(node, idx + needle.length);
+    const mark = document.createElement("mark");
+    mark.className = "pdf-find-hit";
+    try {
+      range.surroundContents(mark);
+      hits++;
+    } catch {
+      // a match spanning text nodes cannot be wrapped individually — skip it
+    }
+  }
+  return hits;
+}
+
+async function runPdfSearch() {
+  const input = $("#pdfSearchInput") as HTMLInputElement | null;
+  const status = $("#pdfSearchStatus");
+  if (!input || !status) return;
+  pdfFindQuery = input.value.trim();
+  pdfFindPages = [];
+  pdfFindIndex = -1;
+  if (!pdfFindQuery || !activePdfDocument) {
+    status.textContent = "";
+    const allPages = Array.from(
+      $("#pdfPreview")?.querySelectorAll(".pdf-page") || []
+    ) as HTMLElement[];
+    allPages.forEach(clearPdfHighlights);
+    return;
+  }
+  status.textContent = "搜索中…";
+  const needle = pdfFindQuery.toLowerCase();
+  for (let i = 1; i <= activePdfDocument.numPages; i++) {
+    const page = await activePdfDocument.getPage(i);
+    const content = await page.getTextContent();
+    const text = (content.items as any[]).map((it) => it.str || "").join(" ").toLowerCase();
+    if (text.includes(needle)) pdfFindPages.push(i);
+  }
+  if (!pdfFindPages.length) {
+    status.textContent = "未找到";
+    return;
+  }
+  pdfFindIndex = 0;
+  await gotoPdfFindHit();
+}
+
+async function gotoPdfFindHit() {
+  const status = $("#pdfSearchStatus");
+  if (!status || !pdfFindPages.length) return;
+  const pageNo = pdfFindPages[pdfFindIndex];
+  await gotoPdfPage(pageNo);
+  status.textContent = `第 ${pdfFindIndex + 1}/${pdfFindPages.length} 处 · 第 ${pageNo} 页`;
+}
+
+async function gotoPdfPage(pageNo: number) {
+  const total = activePdfDocument?.numPages || 1;
+  const target = Math.min(Math.max(1, Math.round(pageNo)), total);
+  const fig = $("#pdfPreview")?.querySelector(
+    `.pdf-page[data-page="${target}"]`
+  ) as HTMLElement | null;
+  const input = $("#pdfPageInput") as HTMLInputElement | null;
+  if (input) input.value = String(target);
+  if (!fig) return;
+  fig.scrollIntoView({ block: "start" });
+  await renderVisiblePdfPages(pdfRenderToken);
+  highlightPdfPageHits(fig);
+}
+
+// ---- toolbar + viewport wiring ---------------------------------------------
+(function wirePdfViewer() {
+  let scrollTick = 0;
+  window.addEventListener("scroll", () => {
+    if (!activePdfDocument) return;
+    if (scrollTick) return;
+    scrollTick = window.setTimeout(() => {
+      scrollTick = 0;
+      renderVisiblePdfPages(pdfRenderToken);
+    }, 120);
+  }, { passive: true });
+
+  let resizeTick = 0;
+  window.addEventListener("resize", () => {
+    if (!activePdfDocument) return;
+    window.clearTimeout(resizeTick);
+    resizeTick = window.setTimeout(refreshPdfLayout, 250);
+  });
+
+  $("#pdfPrevPage")?.addEventListener("click", () => {
+    const cur = Number(($("#pdfPageInput") as HTMLInputElement)?.value || 1);
+    gotoPdfPage(cur - 1);
+  });
+  $("#pdfNextPage")?.addEventListener("click", () => {
+    const cur = Number(($("#pdfPageInput") as HTMLInputElement)?.value || 1);
+    gotoPdfPage(cur + 1);
+  });
+  $("#pdfPageInput")?.addEventListener("change", (e: any) => {
+    gotoPdfPage(Number(e.target.value || 1));
+  });
+
+  const setZoom = (next: number, fit = false) => {
+    pdfFitWidth = fit;
+    if (!fit) pdfZoom = Math.min(4, Math.max(0.4, next));
+    refreshPdfLayout();
+  };
+  $("#pdfZoomIn")?.addEventListener("click", () => setZoom(pdfZoom + 0.15));
+  $("#pdfZoomOut")?.addEventListener("click", () => setZoom(pdfZoom - 0.15));
+  $("#pdfZoomFit")?.addEventListener("click", () => setZoom(1, true));
+
+  const searchInput = $("#pdfSearchInput") as HTMLInputElement | null;
+  let searchTick = 0;
+  if (searchInput) {
+    searchInput.addEventListener("input", () => {
+      window.clearTimeout(searchTick);
+      searchTick = window.setTimeout(runPdfSearch, 400);
+    });
+    searchInput.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || !pdfFindPages.length) return;
+      e.preventDefault();
+      pdfFindIndex = (pdfFindIndex + (e.shiftKey ? -1 + pdfFindPages.length : 1)) % pdfFindPages.length;
+      gotoPdfFindHit();
+    });
+  }
+})();
 
 // ==========================================
 // Original Playback Mode System
@@ -3209,6 +3507,9 @@ async function renderOriginalPlaybackView() {
       editorialStage: editorialView,
       pageNavigation: pageNav,
     }, true);
+    // the toolbar lives alongside the stage and only makes sense here
+    const toolbar = $("#pdfToolbar");
+    if (toolbar) toolbar.style.display = "flex";
     if (pdfView) {
       await renderPdfPreview();
     }
@@ -3226,6 +3527,8 @@ async function renderOriginalPlaybackView() {
       editorialStage: editorialView,
       pageNavigation: pageNav,
     }, false);
+    const toolbar = $("#pdfToolbar");
+    if (toolbar) toolbar.style.display = "none";
 
     if (origTitle) {
       origTitle.textContent = current.title || "原版刊物赏析";
@@ -3400,6 +3703,7 @@ if ($("#textFileInput")) {
     if (!file) return;
     try {
       const isPdf = file.name.toLowerCase().endsWith(".pdf");
+      const isEpub = file.name.toLowerCase().endsWith(".epub");
       if (isPdf) {
         const extracted = await extractPdf(file);
         const report = diagnoseTextQuality(extracted.text);
@@ -3416,6 +3720,15 @@ if ($("#textFileInput")) {
           openImportedReading(file, finalText, extracted.doc);
         } else {
           openEditor({ id: "", title: file.name.replace(/\.[^.]+$/, ""), body: finalText, created: "刚刚" }, false);
+        }
+      } else if (isEpub) {
+        // EPUB → extract ordered chapters, then join into one readable document
+        const book = await parseEpub(file);
+        const fullText = chaptersToDocument(book);
+        if (direct || confirm(`已从「${book.title}」提取 ${book.chapters.length} 个章节。\n直接进入阅读器阅读？选择“取消”可先进入编辑器精修。`)) {
+          openImportedReading(file, fullText, null);
+        } else {
+          openEditor({ id: "", title: book.title, body: fullText, created: "刚刚" }, false);
         }
       } else {
         const text = await file.text();
@@ -3434,7 +3747,7 @@ if ($("#textFileInput")) {
       alert("无法读取该文件。PDF 导入需要网络连接以加载解析组件。");
     } finally {
       e.target.value = "";
-      e.target.accept = ".txt,.pdf,text/plain,application/pdf";
+      e.target.accept = ".txt,.pdf,.epub,text/plain,application/pdf,application/epub+zip";
     }
   };
 }
@@ -4131,35 +4444,57 @@ if ($("#finishQuizBtn")) $("#finishQuizBtn").onclick = () => $("#quizDialog")?.c
 if ($("#regenerateQuizBtn")) $("#regenerateQuizBtn").onclick = () => loadQuiz();
 
 // ==========================================
-// FEATURE 5: Flashcard Review Mode
+// FEATURE 5: Flashcard Review Mode (with SRS scheduling)
 // ==========================================
 let currentFcIndex = 0;
+let reviewQueue: number[] = []; // indices into `words`, due cards only
 
 function updateFlashcard() {
-  if (!words.length) {
-    if ($("#fcWord")) $("#fcWord").textContent = "暂无生词";
+  if (!reviewQueue.length) {
+    if ($("#fcWord")) $("#fcWord").textContent = "暂无待复习";
     if ($("#fcPhonetic")) $("#fcPhonetic").textContent = "";
-    if ($("#fcMeaning")) $("#fcMeaning").textContent = "在阅读时点击单词加入收藏";
+    if ($("#fcMeaning")) $("#fcMeaning").textContent = "今天没有到期生词，去阅读中收藏更多吧！";
     if ($("#flashcardProgress")) $("#flashcardProgress").textContent = "0 / 0";
     return;
   }
-  currentFcIndex = Math.max(0, Math.min(currentFcIndex, words.length - 1));
-  const w = words[currentFcIndex];
+  currentFcIndex = Math.max(0, Math.min(currentFcIndex, reviewQueue.length - 1));
+  const w = words[reviewQueue[currentFcIndex]];
+  if (!w) return;
   if ($("#fcWord")) $("#fcWord").textContent = w.text;
   if ($("#fcPhonetic")) $("#fcPhonetic").textContent = w.phonetic || `/${w.text}/`;
   if ($("#fcMeaning")) $("#fcMeaning").textContent = w.meaning || "未记录详细释义";
   if ($("#fcExample")) $("#fcExample").textContent = w.example ? `"${w.example}"` : "";
   if ($("#flashcardProgress")) {
-    $("#flashcardProgress").textContent = `卡片 ${currentFcIndex + 1} / ${words.length}`;
+    $("#flashcardProgress").textContent = `卡片 ${currentFcIndex + 1} / ${reviewQueue.length}`;
   }
-
-  // Reset flip
   $("#flashcardInner")?.classList.remove("flipped");
+}
+
+function refreshReviewQueue() {
+  reviewQueue = buildReviewQueue(words);
+}
+
+/** Human-readable "next review" hint for the vocabulary list. */
+function srsNextLabel(w: WordItem, now: number): string {
+  const next = w.nextReviewAt;
+  if (next === undefined) return "未复习";
+  const diff = next - now;
+  if (diff <= 0) return "待复习";
+  const days = Math.ceil(diff / (24 * 60 * 60 * 1000));
+  if (days === 1) return "明天复习";
+  return `${days} 天后`;
 }
 
 if ($("#openFlashcards")) {
   $("#openFlashcards").onclick = () => {
     if (!words.length) return alert("生词本还是空的，快去阅读中收藏生词吧！");
+    refreshReviewQueue();
+    if (!reviewQueue.length) {
+      // still open so the empty state is visible instead of a silent no-op
+      $("#flashcardDialog")?.showModal();
+      updateFlashcard();
+      return;
+    }
     currentFcIndex = 0;
     $("#flashcardDialog")?.showModal();
     updateFlashcard();
@@ -4177,9 +4512,8 @@ if ($("#flashcardStage")) {
 if ($("#fcSpeakBtn")) {
   $("#fcSpeakBtn").onclick = (e: Event) => {
     e.stopPropagation();
-    if (words[currentFcIndex]) {
-      speakWord(words[currentFcIndex].text);
-    }
+    const w = words[reviewQueue[currentFcIndex]];
+    if (w) speakWord(w.text);
   };
 }
 
@@ -4194,21 +4528,43 @@ if ($("#fcPrevBtn")) {
 
 if ($("#fcNextBtn")) {
   $("#fcNextBtn").onclick = () => {
-    if (currentFcIndex < words.length - 1) {
+    if (currentFcIndex < reviewQueue.length - 1) {
       currentFcIndex++;
       updateFlashcard();
     } else {
-      alert("太棒了！你已复习完生词本中的所有卡片！");
+      alert("本轮复习完成！到期的生词都过了一遍。");
       $("#flashcardDialog")?.close();
     }
   };
 }
 
-if ($("#fcRememberedBtn")) {
-  $("#fcRememberedBtn").onclick = () => {
-    if ($("#fcNextBtn")) $("#fcNextBtn").click();
-  };
+/** Applies a rating, updates the word's SRS state, and advances the queue. */
+function rateCard(rating: ReviewRating) {
+  const idx = reviewQueue[currentFcIndex];
+  const w = words[idx];
+  if (!w) return;
+  const next = scheduleSrsReview(w, rating);
+  Object.assign(w, next);
+  store("lexi-words", words);
+
+  // remove the just-reviewed card from the queue
+  reviewQueue.splice(currentFcIndex, 1);
+  if (currentFcIndex >= reviewQueue.length) currentFcIndex = Math.max(0, reviewQueue.length - 1);
+  if (reviewQueue.length) {
+    updateFlashcard();
+  } else {
+    $("#flashcardDialog")?.close();
+    alert("太棒了！本轮复习完成，生词已按记忆曲线安排下次复习。");
+  }
 }
+
+if ($("#fcRememberedBtn")) {
+  $("#fcRememberedBtn").onclick = () => rateCard("good");
+}
+
+if ($("#fcAgainBtn")) $("#fcAgainBtn").onclick = () => rateCard("again");
+if ($("#fcHardBtn")) $("#fcHardBtn").onclick = () => rateCard("hard");
+if ($("#fcEasyBtn")) $("#fcEasyBtn").onclick = () => rateCard("easy");
 
 // Initial bootstrap
 renderArticle();
@@ -4226,3 +4582,40 @@ try {
     setPanelCollapsed(true);
   }
 } catch {}
+
+// ==========================================
+// Automatic local backup
+// Snapshots the whole localStorage to userData/backup (kept by the server,
+// newest 7 files) — the safety net against data loss. Runs once shortly after
+// startup and again every 6 hours; failures are silent (it must never nag).
+// ==========================================
+function snapshotLocalStorage(): Record<string, string> {
+  const data: Record<string, string> = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key) data[key] = localStorage.getItem(key) || "";
+  }
+  return data;
+}
+
+async function runAutoBackup(): Promise<void> {
+  try {
+    const data = snapshotLocalStorage();
+    if (Object.keys(data).length === 0) return; // nothing worth backing up
+    await fetch("/api/backup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data }),
+    });
+  } catch {
+    // backup is best-effort and must never surface an error to the user
+  }
+}
+
+(function scheduleAutoBackup() {
+  // first snapshot after the app settles, then every 6 hours
+  window.setTimeout(runAutoBackup, 30 * 1000);
+  window.setInterval(runAutoBackup, 6 * 60 * 60 * 1000);
+  // also grab one on unload so the latest changes are captured
+  window.addEventListener("beforeunload", () => { runAutoBackup(); });
+})();

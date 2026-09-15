@@ -144,6 +144,22 @@
               </div>
             </div>
 
+            <!-- PDF toolbar: zoom / page navigation / in-document search -->
+            <div id="pdfToolbar" class="pdf-toolbar" style="display:none;">
+              <button class="pdf-tool-btn" id="pdfPrevPage" title="上一页">‹</button>
+              <input id="pdfPageInput" class="pdf-page-input" type="number" min="1" value="1" />
+              <span id="pdfPageCount" class="pdf-page-count">/ 1</span>
+              <button class="pdf-tool-btn" id="pdfNextPage" title="下一页">›</button>
+              <span class="pdf-tool-sep"></span>
+              <button class="pdf-tool-btn" id="pdfZoomOut" title="缩小">−</button>
+              <span id="pdfZoomLabel" class="pdf-zoom-label">100%</span>
+              <button class="pdf-tool-btn" id="pdfZoomIn" title="放大">+</button>
+              <button class="pdf-tool-btn pdf-tool-wide" id="pdfZoomFit" title="适应宽度">适应宽度</button>
+              <span class="pdf-tool-sep"></span>
+              <input id="pdfSearchInput" class="pdf-search-input" type="search" placeholder="在本 PDF 中查找…" />
+              <span id="pdfSearchStatus" class="pdf-search-status"></span>
+            </div>
+
             <!-- PDF Original Visual Stage (rendered when PDF is loaded) -->
             <div id="pdfPreview" class="pdf-preview" style="display:none;"></div>
 
@@ -811,9 +827,12 @@
         </div>
       </div>
     </div>
-    <div style="display:flex;justify-content:center;gap:12px;margin-top:16px;">
+    <div style="display:flex;justify-content:center;gap:8px;margin-top:16px;flex-wrap:wrap;">
       <button id="fcPrevBtn" class="outline-btn">← 上一个</button>
-      <button id="fcRememberedBtn" class="outline-btn" style="border-color:#34a853;color:#137333;">✓ 已记住</button>
+      <button id="fcAgainBtn" class="srs-btn srs-again">忘记</button>
+      <button id="fcHardBtn" class="srs-btn srs-hard">模糊</button>
+      <button id="fcRememberedBtn" class="srs-btn srs-good">熟悉</button>
+      <button id="fcEasyBtn" class="srs-btn srs-easy">轻松</button>
       <button id="fcNextBtn" class="primary-btn">下一个 →</button>
     </div>
   </dialog>
@@ -906,7 +925,7 @@
     </div>
   </dialog>
 
-  <input id="textFileInput" type="file" accept=".txt,.pdf,text/plain,application/pdf" hidden />
+  <input id="textFileInput" type="file" accept=".txt,.pdf,.epub,text/plain,application/pdf,application/epub+zip" hidden />
   <input id="audioFileInput" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg" hidden />
 
   <!-- IMMERSIVE EXIT FLOATING HUD -->

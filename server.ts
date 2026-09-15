@@ -725,6 +725,58 @@ app.post("/api/setup-llm-key", (req: Request, res: Response) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Automatic local backup: the renderer posts its full localStorage snapshot;
+// the server writes it under userData/backup and prunes to the newest N files.
+// This is the safety net against localStorage loss — the single biggest data
+// risk in the app, since articles, vocabulary and settings all live there.
+// ---------------------------------------------------------------------------
+function backupDir(): string {
+  const envPath = runtime.envPath || pickRecommendedEnvPath(process.env);
+  const dir = envPath.replace(/\\/g, '/');
+  const userData = dir.endsWith('/.env') ? dir.slice(0, -5) : path.dirname(dir);
+  return path.join(userData, 'backup');
+}
+
+const BACKUP_KEEP = 7;
+
+app.post("/api/backup", (req: Request, res: Response) => {
+  if (!isLoopbackAddress(req.socket.remoteAddress || "")) {
+    res.status(403).json({ ok: false, error: "备份仅允许在本机操作" });
+    return;
+  }
+  const payload = req.body?.data;
+  if (!payload || typeof payload !== "object") {
+    res.status(400).json({ ok: false, error: "缺少备份数据" });
+    return;
+  }
+  try {
+    const dir = backupDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const file = path.join(dir, `lexiread-${stamp}.json`);
+    const json = JSON.stringify({
+      exportedAt: new Date().toISOString(),
+      version: runtime.appRoot ? "1" : "1",
+      data: payload,
+    }, null, 2);
+    fs.writeFileSync(file, json, "utf8");
+
+    // prune to the newest BACKUP_KEEP files
+    const files = fs.readdirSync(dir)
+      .filter((f) => f.startsWith("lexiread-") && f.endsWith(".json"))
+      .sort()
+      .reverse();
+    for (const stale of files.slice(BACKUP_KEEP)) {
+      try { fs.unlinkSync(path.join(dir, stale)); } catch { /* best-effort */ }
+    }
+
+    res.json({ ok: true, path: file, kept: Math.min(files.length, BACKUP_KEEP) });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: `备份失败: ${err?.message || err}` });
+  }
+});
+
 function decodeHtmlEntities(str: string): string {
   return str
     .replace(/&#39;/g, "'")

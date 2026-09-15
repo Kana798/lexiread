@@ -2341,6 +2341,89 @@ blockquote {
 /* PDF Preview */
 .pdf-preview {
   margin: 27px 0;
+  /* pages can be wider than the viewport when zoomed in, so allow panning */
+  overflow-x: auto;
+}
+
+/* ---- PDF toolbar ---- */
+.pdf-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 18px 0 4px;
+  padding: 8px 12px;
+  background: var(--cream);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.pdf-tool-btn {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 600 13px/1 'DM Sans', sans-serif;
+  cursor: var(--cursor-pointer);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.pdf-tool-btn:hover {
+  background: var(--paper-2, #f3efe6);
+  border-color: var(--blue);
+}
+
+.pdf-tool-wide {
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.pdf-tool-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--line);
+  margin: 0 4px;
+}
+
+.pdf-page-input {
+  width: 52px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 12px 'DM Mono', monospace;
+}
+
+.pdf-page-count,
+.pdf-zoom-label,
+.pdf-search-status {
+  font: 11.5px 'DM Mono', monospace;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.pdf-search-input {
+  flex: 1;
+  min-width: 140px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.pdf-search-input:focus,
+.pdf-page-input:focus {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(36, 87, 214, 0.12);
 }
 
 .pdf-preview figure {
@@ -2351,11 +2434,96 @@ blockquote {
   position: relative;
 }
 
+/* Un-rendered pages keep their slot so the scrollbar never jumps. */
+.pdf-page-pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f7f4ed;
+  color: var(--muted);
+  font: 11px 'DM Mono', monospace;
+  letter-spacing: 0.05em;
+}
+
+/* canvas size is driven from JS so zoom actually changes the page size */
 .pdf-preview canvas {
   display: block;
-  width: 100%;
-  height: auto;
   background: white;
+}
+
+/* ---- in-PDF search highlight ---- */
+.pdf-find-hit {
+  background: rgba(246, 217, 112, 0.85);
+  color: var(--ink);
+  border-radius: 2px;
+}
+
+.pdf-find-hit-current {
+  background: var(--blue);
+  color: #fff;
+}
+
+/* ---- SRS flashcard rating buttons ---- */
+.srs-btn {
+  min-width: 52px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  font: 600 13px/1 'DM Sans', sans-serif;
+  cursor: var(--cursor-pointer);
+  transition: filter 0.15s ease, transform 0.05s ease;
+}
+
+.srs-btn:hover {
+  filter: brightness(1.06);
+}
+
+.srs-btn:active {
+  transform: scale(0.97);
+}
+
+.srs-again {
+  background: #fbe9e7;
+  color: #b3261e;
+  border-color: #e6c2bc;
+}
+
+.srs-hard {
+  background: #fdf3e0;
+  color: #b26a00;
+  border-color: #ecd3a6;
+}
+
+.srs-good {
+  background: #e6f4ea;
+  color: #137333;
+  border-color: #c4e2cc;
+}
+
+.srs-easy {
+  background: #e8f0fe;
+  color: #1a5fd0;
+  border-color: #c5d6f5;
+}
+
+/* ---- vocabulary due-state badge ---- */
+.word-due {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  vertical-align: 2px;
+  background: #f0ede6;
+  color: var(--muted);
+}
+
+.word-due-now {
+  background: var(--yellow);
+  color: var(--ink);
+  font-weight: 600;
 }
 
 .pdf-preview figcaption {
