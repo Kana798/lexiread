@@ -11,6 +11,9 @@
 *.cjs  text eol=lf
 *.json text eol=lf
 *.md   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+LICENSE text eol=lf
 
 # 二进制
 *.png  binary
