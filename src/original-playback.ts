@@ -1,3 +1,4 @@
+// LexiRead · © 2026 LSJKANA · AGPL-3.0
 export interface OriginalPlaybackStage {
   hidden: boolean;
   style: { display: string };

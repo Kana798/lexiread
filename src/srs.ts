@@ -1,3 +1,4 @@
+// LexiRead · © 2026 LSJKANA · AGPL-3.0
 /**
  * Spaced-repetition scheduling (a lean FSRS-style model).
  *

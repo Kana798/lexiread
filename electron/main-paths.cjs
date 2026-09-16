@@ -1,3 +1,4 @@
+// LexiRead · © 2026 LSJKANA · AGPL-3.0
 const path = require('node:path');
 
 function resolveDesktopPaths({ isPackaged, dirname, userDataPath }) {

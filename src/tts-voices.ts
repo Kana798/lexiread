@@ -1,3 +1,4 @@
+// LexiRead · © 2026 LSJKANA · AGPL-3.0
 /**
  * Edge TTS voice catalogue (Microsoft neural voices).
  *

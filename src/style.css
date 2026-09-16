@@ -2275,6 +2275,22 @@ blockquote {
   text-decoration: underline;
 }
 
+/* Author signature — quiet by design, but always present in the footer. */
+.footer-signature {
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  color: #8a8478;
+  opacity: 0.8;
+  user-select: none;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.footer-signature:hover {
+  opacity: 1;
+  color: #4a7758;
+}
+
 /* Settings View - Shortcuts & Gestures Guide Grid */
 .shortcuts-guide-grid {
   display: grid;

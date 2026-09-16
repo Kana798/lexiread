@@ -1,3 +1,4 @@
+// LexiRead · © 2026 LSJKANA · AGPL-3.0
 type JsonResponse = { ok: boolean; json(): Promise<unknown> };
 type PublicFetch = (url: string) => Promise<JsonResponse>;
 

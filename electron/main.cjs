@@ -1,3 +1,4 @@
+// LexiRead · © 2026 LSJKANA · AGPL-3.0
 const { app, BrowserWindow, dialog } = require('electron');
 const { resolveDesktopPaths } = require('./main-paths.cjs');
 const { startLocalServer } = require('./local-server.cjs');

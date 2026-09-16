@@ -1,3 +1,4 @@
+// LexiRead · © 2026 LSJKANA · AGPL-3.0
 /**
  * End-to-end check of the neural TTS path, in the real Electron renderer.
  *

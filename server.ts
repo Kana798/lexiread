@@ -1,3 +1,4 @@
+// LexiRead · © 2026 LSJKANA · AGPL-3.0
 import express, { Request, Response, NextFunction } from "express";
 import fs from "node:fs";
 import path from "path";

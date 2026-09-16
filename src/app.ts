@@ -1,3 +1,4 @@
+// LexiRead · © 2026 LSJKANA · AGPL-3.0
 // LexiRead Core Application Logic
 // Inherited and enhanced with a built-in DeepSeek backend (server-side proxy)
 import { formPdfLine } from './pdf-extraction';

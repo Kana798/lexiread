@@ -1,3 +1,4 @@
+// LexiRead · © 2026 LSJKANA · AGPL-3.0
 const net = require('node:net');
 const http = require('node:http');
 const { spawn } = require('node:child_process');

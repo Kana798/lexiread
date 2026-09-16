@@ -1,3 +1,4 @@
+// LexiRead · © 2026 LSJKANA · AGPL-3.0
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { buildYoudaoRequest, truncateYoudaoQuery } from './youdao-translation';

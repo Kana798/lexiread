@@ -1,3 +1,4 @@
+// LexiRead · © 2026 LSJKANA · AGPL-3.0
 import { createHash } from 'node:crypto';
 
 export function truncateYoudaoQuery(text: string): string {

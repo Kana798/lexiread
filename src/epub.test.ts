@@ -1,3 +1,4 @@
+// LexiRead · © 2026 LSJKANA · AGPL-3.0
 import { test, before } from 'node:test';
 import { strict as assert } from 'node:assert/strict';
 import JSZip from 'jszip';

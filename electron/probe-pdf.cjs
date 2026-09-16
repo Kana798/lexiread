@@ -1,3 +1,4 @@
+// LexiRead · © 2026 LSJKANA · AGPL-3.0
 /**
  * Probes the PDF engine the way the real app runs it: an HTTP origin served by
  * dist/server.cjs, loaded into a sandboxed renderer.
