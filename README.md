@@ -46,21 +46,13 @@
 
 ## 🖼️ 界面预览
 
-<!-- 截图待补充：运行应用后截图，存为
-     docs/screenshots/reading.png   (阅读界面)
-     docs/screenshots/pdf.png       (PDF 原版视图)
-     docs/screenshots/srs.png       (生词复习)
-     然后取消下面表格的注释即可显示。 -->
-
-<!--
-| 阅读界面 | PDF 原版视图 | 生词复习 |
+| 阅读界面 | 生词闪卡复习 | PDF 原版视图 |
 |:---:|:---:|:---:|
-| ![阅读](docs/screenshots/reading.png) | ![PDF](docs/screenshots/pdf.png) | ![复习](docs/screenshots/srs.png) |
--->
+| ![阅读界面](docs/screenshots/reading.png) | ![生词复习](docs/screenshots/srs.png) | ![PDF 原版视图](docs/screenshots/pdf.png) |
 
-> 补图方式：运行 `启动阅读器.bat`，截取「阅读界面 / PDF 原版视图 / 闪卡复习」三个画面，
-> 存到 `docs/screenshots/`（文件名：`reading.png`、`pdf.png`、`srs.png`），
-> 再取消上面表格的注释即可。
+<sub>阅读界面：段落编号、文章难度（A2）、右侧生词本、底部语音播放器。
+闪卡：四级评分（忘记 / 模糊 / 熟悉 / 轻松），卡片可点击朗读。
+PDF：逐页渲染 + 文本可划选，页内查找与缩放，可与配套音频同步点读。</sub>
 
 ---
 
