@@ -2526,6 +2526,109 @@ blockquote {
   font-weight: 600;
 }
 
+/* ---- "jump back to source" flash on the located paragraph ---- */
+.quote-locate-flash {
+  animation: quoteLocateFlash 1.9s ease-out;
+  border-radius: 4px;
+}
+
+@keyframes quoteLocateFlash {
+  0% {
+    background-color: rgba(56, 142, 94, 0.42);
+    box-shadow: 0 0 0 4px rgba(56, 142, 94, 0.22);
+  }
+  60% {
+    background-color: rgba(56, 142, 94, 0.22);
+    box-shadow: 0 0 0 2px rgba(56, 142, 94, 0.12);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quote-locate-flash {
+    animation: none;
+    background-color: rgba(56, 142, 94, 0.28);
+  }
+}
+
+/* ---- web (URL) import dialog ---- */
+.url-import-body {
+  padding: 4px 22px 10px;
+}
+
+.url-import-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 13px 'DM Mono', ui-monospace, monospace;
+  outline: none;
+}
+
+.url-import-input:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(36, 87, 214, 0.12);
+}
+
+.url-import-msg {
+  min-height: 18px;
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.url-import-msg:empty {
+  min-height: 0;
+}
+
+.url-import-hint {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* ---- words swapped out by the CEFR simplifier ---- */
+.vocab-replaced {
+  position: relative;
+  border-bottom: 1.5px dashed rgba(178, 106, 0, 0.65);
+  background: rgba(253, 243, 224, 0.5);
+  border-radius: 2px;
+  cursor: help;
+  transition: background 0.15s ease;
+}
+
+.vocab-replaced:hover {
+  background: rgba(253, 243, 224, 0.95);
+}
+
+.vocab-replaced::after {
+  content: "原文：" attr(data-original);
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  transform: translate(-50%, -6px);
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: var(--ink);
+  color: var(--paper);
+  font: 11.5px/1.4 'DM Sans', sans-serif;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 20;
+}
+
+.vocab-replaced:hover::after {
+  opacity: 1;
+}
+
 .pdf-preview figcaption {
   font: 10px 'DM Mono';
   color: var(--muted);
@@ -4297,4 +4400,101 @@ blockquote {
   line-height: 1.5;
   color: var(--muted);
   text-align: center;
+}
+
+/* ---------------------------------------------------------------------------
+   Mobile refinements
+   The original responsive pass predates the PDF toolbar, the SRS rating row and
+   the import action group — these rules keep the newer UI usable on phones.
+--------------------------------------------------------------------------- */
+@media (max-width: 680px) {
+  /* let action rows wrap instead of overflowing */
+  .header-actions {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* PDF toolbar: search moves to its own line, "fit width" is redundant here */
+  .pdf-toolbar {
+    gap: 5px;
+    padding: 7px 9px;
+  }
+
+  .pdf-tool-wide {
+    display: none;
+  }
+
+  .pdf-page-input {
+    width: 46px;
+  }
+
+  .pdf-search-input {
+    order: 10;
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  /* SRS review row wraps to two lines and keeps a comfortable tap size */
+  .srs-btn {
+    min-width: 46px;
+    height: 34px;
+  }
+
+  /* dialogs hug the viewport */
+  .custom-modal,
+  .grammar-modal-dialog,
+  .setup-guide {
+    width: min(94vw, 460px);
+    max-height: 88vh;
+    overflow-y: auto;
+  }
+
+  /* the article should not need horizontal scrolling */
+  .pdf-preview {
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 560px) {
+  /* comfortable touch targets for the controls people actually tap */
+  .pdf-tool-btn,
+  .note-action-btn,
+  .repair-action-btn,
+  .srs-btn {
+    min-height: 34px;
+  }
+
+  .flashcard-stage {
+    min-height: 240px;
+  }
+
+  .srs-btn {
+    font-size: 12.5px;
+    padding: 0 8px;
+  }
+
+  /* import actions stack rather than shrink */
+  .header-actions .outline-btn,
+  .header-actions .primary-btn {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .url-import-body {
+    padding: 4px 16px 10px;
+  }
+}
+
+/* Touch devices cannot hover, so the custom tooltips would never show —
+   fall back to the native title attribute and enlarge tap targets. */
+@media (hover: none) {
+  .vocab-replaced::after {
+    display: none;
+  }
+
+  .pdf-tool-btn,
+  .srs-btn,
+  .note-action-btn {
+    min-height: 36px;
+  }
 }

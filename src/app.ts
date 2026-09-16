@@ -6,12 +6,32 @@ import { diagnoseText as sharedDiagnoseText, repairText as sharedRepairText } fr
 import { setOriginalStageVisibility } from './original-playback';
 import { parseEpub, chaptersToDocument } from './epub';
 import { scheduleSrsReview, buildReviewQueue, isDue, type ReviewRating } from './srs';
+import { findNoteParagraph } from './note-locate';
+import { rateDifficulty } from './difficulty';
+import {
+  EDGE_VOICES,
+  ACCENT_LABELS,
+  DEFAULT_VOICE_ID,
+  isKnownVoice,
+  langOfVoice,
+  availableAccents,
+} from './tts-voices';
 
 // pdf.js ships with the app (no CDN): the reader must work offline.
-// The worker is inlined as source and turned into a blob URL because the
-// packaged app runs from file://, where normal worker file loading is blocked.
-import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorkerSource from 'pdfjs-dist/build/pdf.worker.min.js?raw';
+//
+// The worker is emitted as its own asset and referenced by URL. An inlined
+// blob: worker looked appealing for file:// use, but blob URLs proved
+// unreliable here (workerSrc ended up empty and pdf.js refused to parse). The
+// packaged app always loads the UI from http://127.0.0.1:<port>, so a normal
+// asset URL is both simpler and correct — and it keeps the worker out of the
+// main bundle.
+import * as pdfjsModule from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
+
+// pdfjs-dist is a CommonJS/UMD bundle; once Vite wraps it the named exports are
+// copies while the live module object hangs off `default`. pdf.js reads
+// GlobalWorkerOptions from the latter, so always configure it through `default`.
+const pdfjsLib: any = (pdfjsModule as any).default ?? pdfjsModule;
 
 declare global {
   interface Window {
@@ -20,11 +40,20 @@ declare global {
 }
 
 /** Configures pdf.js once, at module load. */
+let __pdfReady = false;
 function initPdfEngine() {
-  if (window.pdfjsLib) return;
-  const blob = new Blob([pdfWorkerSource], { type: 'application/javascript' });
-  pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
-  window.pdfjsLib = pdfjsLib;
+  // NOTE: do NOT gate this on `window.pdfjsLib` — the UMD bundle assigns
+  // itself to globalThis.pdfjsLib on load, so such a guard silently skips the
+  // worker configuration and PDF parsing then fails with
+  // 'No "GlobalWorkerOptions.workerSrc" specified'.
+  if (__pdfReady) return;
+  try {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+    window.pdfjsLib = pdfjsLib;
+    __pdfReady = true;
+  } catch (err: any) {
+    console.error("[pdf] 引擎初始化失败:", err);
+  }
 }
 
 initPdfEngine();
@@ -47,6 +76,8 @@ interface ArticleItem {
   created: string;
   originalBody?: string;
   level?: string;
+  /** Auto-rated difficulty of the *original* text (see src/difficulty.ts). */
+  difficulty?: { level: string; score: number; advice: string };
   translations?: string[]; // Pre-translated paragraph Chinese content
 }
 
@@ -330,14 +361,33 @@ function renderParagraphNoteCapsules() {
   });
 }
 
+/**
+ * Rates an article's difficulty once, lazily, on first render. Doing it here
+ * (rather than at each import site) means pasted, imported and EPUB/PDF
+ * articles all get rated, and the result is cached on the article.
+ */
+function ensureDifficulty(article: ArticleItem) {
+  if (article.difficulty) return;
+  const plain = article.body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  if (plain.length < 40) return; // not enough text to judge
+  const rating = rateDifficulty(plain);
+  article.difficulty = { level: rating.level, score: rating.score, advice: rating.advice };
+  store("lexi-articles", articles);
+}
+
 function renderArticle() {
   if ($("#articleTitle")) $("#articleTitle").textContent = current.title;
   if ($("#articleContent")) $("#articleContent").innerHTML = current.body;
+  ensureDifficulty(current);
   if ($("#articleMetaText")) {
     const wordsCount = current.body.replace(/<[^>]*>/g, " ").trim().split(/\s+/).length;
     const readMin = Math.max(1, Math.round(wordsCount / 180));
-    const levelTag = current.level ? ` · ${current.level}` : "";
-    $("#articleMetaText").textContent = `ESSAY · ${readMin} MIN READ${levelTag}`;
+    const parts = ["ESSAY", `${readMin} MIN READ`];
+    if (current.difficulty?.level) parts.push(`难度 ${current.difficulty.level}`);
+    if (current.level) parts.push(`已简化至 ${current.level}`);
+    const meta = $("#articleMetaText");
+    meta.textContent = parts.join(" · ");
+    if (current.difficulty?.advice) meta.title = current.difficulty.advice;
   }
   decorateWords();
   applyParaNumMode(currentParaNumMode);
@@ -1024,17 +1074,28 @@ let calibrationMode = false;
 let isDraggingAudioProgress = false;
 let activePdfDocument: any = null;
 let selectedRate = 1;
-let selectedAccent = "en-US";
 let availableVoices: SpeechSynthesisVoice[] = [];
 let audioMarkers: { w: HTMLElement; t: number }[] = [];
 
-const accentLabels: Record<string, string> = {
-  "en-US": "美式通用",
-  "en-GB": "英式标准 RP",
-  "en-AU": "澳式通用",
-  "en-CA": "加式通用",
-  "en-IE": "爱尔兰英语",
-};
+/** Short label for a voice id, used in status messages. */
+function voiceLabelOf(id: string): string {
+  return EDGE_VOICES.find((v) => v.id === id)?.label || ACCENT_LABELS[langOfVoice(id)] || id;
+}
+
+/**
+ * Playback voice.
+ *
+ * Reading aloud uses Microsoft's neural voices (Edge TTS) via /api/tts: they
+ * are near-human and cover many English accents, which the built-in system
+ * engine cannot do (it typically ships a single robotic en-US voice, so
+ * switching accents silently fell back to the same sound).
+ *
+ * The system engine is kept purely as an offline fallback.
+ */
+let selectedVoiceId = String(load("lexi-voice", DEFAULT_VOICE_ID));
+if (!isKnownVoice(selectedVoiceId)) selectedVoiceId = DEFAULT_VOICE_ID;
+/** Cleared for the session after the first failure, so we degrade gracefully. */
+let cloudTtsEnabled = true;
 
 function refreshVoices() {
   if ("speechSynthesis" in window) {
@@ -1046,15 +1107,35 @@ if ("speechSynthesis" in window) {
   speechSynthesis.onvoiceschanged = refreshVoices;
 }
 
+/**
+ * Configures the fallback system utterance.
+ *
+ * Matching only on accent was not enough: Windows typically ships a single
+ * en-US pair (a male and a female), so an accent miss used to fall back to
+ * whichever English voice came first — which is why a female voice could
+ * suddenly come out male. Gender is matched first now.
+ */
+const SYSTEM_FEMALE_HINT = /zira|aria|jenny|sonia|samantha|female|huihui|yaoyao|xiaoxiao|michelle|libby/i;
+const SYSTEM_MALE_HINT = /david|mark|guy|ryan|george|james|male|yunxi|kangkang|thomas/i;
+
 function setEnglishVoice(utterance: SpeechSynthesisUtterance) {
-  utterance.lang = selectedAccent;
-  const exact = availableVoices.find(
-    (v) => v.lang.toLowerCase() === selectedAccent.toLowerCase()
-  );
-  const fallback = availableVoices.find((v) =>
-    v.lang.toLowerCase().startsWith(selectedAccent.slice(0, 2).toLowerCase())
-  );
-  utterance.voice = exact || fallback || null;
+  const accent = langOfVoice(selectedVoiceId);
+  utterance.lang = accent;
+
+  const wantFemale = EDGE_VOICES.find((v) => v.id === selectedVoiceId)?.gender === "female";
+  const english = availableVoices.filter((v) => v.lang.toLowerCase().startsWith("en"));
+  const sameAccent = availableVoices.filter((v) => v.lang.toLowerCase() === accent.toLowerCase());
+  const genderMatches = (v: SpeechSynthesisVoice) =>
+    wantFemale ? SYSTEM_FEMALE_HINT.test(v.name || "") : SYSTEM_MALE_HINT.test(v.name || "");
+
+  const pick =
+    sameAccent.find(genderMatches) ||
+    english.find(genderMatches) ||
+    sameAccent[0] ||
+    english[0] ||
+    null;
+
+  utterance.voice = pick;
   return utterance;
 }
 
@@ -1101,9 +1182,179 @@ function stopTtsKeepAlive() {
   }
 }
 
+// ---- Neural cloud TTS playback --------------------------------------------
+// Reads sentences with Microsoft's neural voices so accents are real and the
+// audio sounds human. Any failure falls back to the system engine below.
+
+let activeCloudAudio: HTMLAudioElement | null = null;
+let cloudAbort: AbortController | null = null;
+
+/**
+ * Consecutive *real* failures before giving up on the cloud voice. A single
+ * blip (or a deliberate cancellation) must not downgrade playback.
+ */
+let cloudTtsFailures = 0;
+const CLOUD_FAILURE_THRESHOLD = 3;
+
+/**
+ * Client-side audio cache. The server already caches, but keeping the blob
+ * locally removes the round trip entirely — which is what makes replaying a
+ * sentence, or switching back to a voice you just used, feel instant.
+ */
+const cloudAudioCache = new Map<string, string>();
+const CLOUD_CACHE_LIMIT = 40;
+
+function cloudCacheKey(text: string): string {
+  return `${selectedVoiceId}|${text}`;
+}
+
+/** Stores a synthesised clip and returns its object URL. */
+function cacheCloudBlob(text: string, blob: Blob): string {
+  const key = cloudCacheKey(text);
+  const existing = cloudAudioCache.get(key);
+  if (existing) return existing;
+
+  const url = URL.createObjectURL(blob);
+  if (cloudAudioCache.size >= CLOUD_CACHE_LIMIT) {
+    const oldest = cloudAudioCache.keys().next().value;
+    if (oldest !== undefined) {
+      const oldUrl = cloudAudioCache.get(oldest);
+      if (oldUrl) URL.revokeObjectURL(oldUrl);
+      cloudAudioCache.delete(oldest);
+    }
+  }
+  cloudAudioCache.set(key, url);
+  return url;
+}
+
+/** Warms the cache for an upcoming sentence so playback doesn't stall. */
+function prefetchCloud(text: string) {
+  if (!cloudTtsEnabled || !text.trim() || cloudAudioCache.has(cloudCacheKey(text))) return;
+  fetch("/api/tts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, voice: selectedVoiceId }),
+  })
+    .then((res) => (res.ok ? res.blob() : null))
+    .then((blob) => {
+      if (blob) cacheCloudBlob(text, blob);
+    })
+    .catch(() => {
+      /* prefetch is best-effort */
+    });
+}
+
+/** Shared by every call site so a real outage degrades once, not per tap. */
+function handleCloudFailure(err: unknown, fallback: () => void) {
+  cloudTtsFailures++;
+  console.warn(`[tts] 云端语音失败 (${cloudTtsFailures}/${CLOUD_FAILURE_THRESHOLD}):`, err);
+  if (cloudTtsFailures >= CLOUD_FAILURE_THRESHOLD) {
+    cloudTtsEnabled = false;
+    console.warn("[tts] 连续失败，本次会话改用系统语音引擎");
+  }
+  fallback();
+}
+
+function stopCloudAudio() {
+  if (cloudAbort) {
+    cloudAbort.abort();
+    cloudAbort = null;
+  }
+  if (activeCloudAudio) {
+    const audio = activeCloudAudio;
+    activeCloudAudio = null;
+    try {
+      audio.pause();
+    } catch {
+      /* already torn down */
+    }
+    audio.src = "";
+  }
+}
+
+/**
+ * Synthesises one sentence via /api/tts and plays it.
+ *
+ * Resolves once playback ends (so the caller can advance), rejects on any
+ * failure (so the caller can fall back). Word highlighting is derived from
+ * playback progress, since the cloud engine gives no boundary events.
+ */
+/**
+ * Synthesises one sentence via /api/tts and plays it.
+ *
+ * Resolves once playback ends (so the caller can advance). Rejects only on a
+ * *real* failure — a deliberate cancellation (user stopped, or tapped another
+ * word) resolves instead, otherwise every quick tap would look like an outage
+ * and knock playback down to the robotic system voice.
+ */
+function speakViaCloud(text: string, wordCount: number, onWord: (index: number) => void): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const controller = new AbortController();
+    cloudAbort = controller;
+    const cancelled = () => controller.signal.aborted;
+
+    fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice: selectedVoiceId }),
+      signal: controller.signal,
+    })
+      .then((res) => (res.ok ? res.blob() : Promise.reject(new Error(`TTS ${res.status}`))))
+      .then((blob) => {
+        if (cancelled()) {
+          resolve();
+          return;
+        }
+        cloudTtsFailures = 0; // a successful round trip clears earlier blips
+        const url = cacheCloudBlob(text, blob);
+        const audio = new Audio(url);
+        activeCloudAudio = audio;
+        audio.playbackRate = Math.max(0.5, Math.min(2, selectedRate));
+
+        let lastWord = -1;
+        audio.ontimeupdate = () => {
+          if (!audio.duration || wordCount <= 0) return;
+          const idx = Math.min(wordCount - 1, Math.floor((audio.currentTime / audio.duration) * wordCount));
+          if (idx !== lastWord) {
+            lastWord = idx;
+            onWord(idx);
+          }
+        };
+
+        const detach = () => {
+          if (activeCloudAudio === audio) activeCloudAudio = null;
+        };
+        audio.onended = () => {
+          detach();
+          resolve();
+        };
+        audio.onerror = () => {
+          detach();
+          // Clearing `src` while tearing down raises a spurious error event.
+          if (cancelled()) resolve();
+          else reject(new Error("云端音频播放失败"));
+        };
+        audio.play().catch((err) => {
+          detach();
+          if (cancelled()) resolve();
+          else reject(err);
+        });
+      })
+      .catch((err) => {
+        // An abort is a cancellation, never a failure.
+        if (cancelled() || err?.name === "AbortError") {
+          resolve();
+          return;
+        }
+        reject(err);
+      });
+  });
+}
+
 function stopSpeechSafely(cancelSpeechEngine = true) {
   activeUtteranceId++;
   stopTtsKeepAlive();
+  stopCloudAudio();
   activeUtteranceRef = null;
   (window as any)._lexiActiveUtterance = null;
   if (cancelSpeechEngine && "speechSynthesis" in window) {
@@ -1318,72 +1569,122 @@ function playFrom(index = 0, wordIndex = 0, isUserInitiated = true) {
     return;
   }
 
-  const utterance = setEnglishVoice(new SpeechSynthesisUtterance(textToSpeak));
-  utterance.rate = Math.max(0.1, Math.min(10, 0.88 * selectedRate));
-
-  activeUtteranceRef = utterance;
-  (window as any)._lexiActiveUtterance = utterance;
-
-  utterance.onboundary = (e) => {
-    if (thisUtteranceId !== activeUtteranceId) return;
-    if (e.name === "word") {
-      const charIndex = e.charIndex;
-      let matched = wordSpans.find((s) => charIndex >= s.start && charIndex < s.end);
-      if (!matched) {
-        for (let j = wordSpans.length - 1; j >= 0; j--) {
-          if (wordSpans[j].start <= charIndex) {
-            matched = wordSpans[j];
-            break;
-          }
-        }
-      }
-      if (matched && matched.wordIdx !== playbackWord) {
-        playbackWord = matched.wordIdx;
-        updatePlayer();
-      }
-    }
-  };
-
-  utterance.onend = () => {
-    if (thisUtteranceId !== activeUtteranceId || !playbackActive || isPaused) return;
-    stopTtsKeepAlive();
-    activeUtteranceRef = null;
-    (window as any)._lexiActiveUtterance = null;
+  // ---- Speak this sentence -------------------------------------------------
+  const advance = () => {
     if (playbackIndex < parts.length - 1) {
-      // Transition smoothly to next paragraph without cancelling speech queue
       setTimeout(() => {
-        if (playbackActive && !isPaused) {
-          playFrom(playbackIndex + 1, 0, false);
-        }
-      }, 150);
+        if (playbackActive && !isPaused) playFrom(playbackIndex + 1, 0, false);
+      }, 130);
     } else {
       finishPlayback();
     }
   };
 
-  utterance.onerror = (e) => {
-    if (thisUtteranceId !== activeUtteranceId) return;
-    stopTtsKeepAlive();
-    activeUtteranceRef = null;
-    (window as any)._lexiActiveUtterance = null;
-    if (e.error === "canceled" || e.error === "interrupted") {
+  /** Offline fallback: the platform speech engine (robotic, single accent). */
+  const speakWithSystemEngine = () => {
+    if (!("speechSynthesis" in window)) {
+      advance();
       return;
     }
-    console.warn("Speech synthesis notice:", e.error);
-    // Auto-advance so audio playback never gets stuck halfway through an article!
-    if (playbackActive && !isPaused && playbackIndex < parts.length - 1) {
-      setTimeout(() => {
-        if (playbackActive && !isPaused) {
-          playFrom(playbackIndex + 1, 0, false);
+
+    const utterance = setEnglishVoice(new SpeechSynthesisUtterance(textToSpeak));
+    utterance.rate = Math.max(0.1, Math.min(10, 0.88 * selectedRate));
+
+    activeUtteranceRef = utterance;
+    (window as any)._lexiActiveUtterance = utterance;
+
+    utterance.onboundary = (e) => {
+      if (thisUtteranceId !== activeUtteranceId) return;
+      if (e.name === "word") {
+        const charIndex = e.charIndex;
+        let matched = wordSpans.find((s) => charIndex >= s.start && charIndex < s.end);
+        if (!matched) {
+          for (let j = wordSpans.length - 1; j >= 0; j--) {
+            if (wordSpans[j].start <= charIndex) {
+              matched = wordSpans[j];
+              break;
+            }
+          }
         }
-      }, 200);
-    } else {
-      finishPlayback();
-    }
+        if (matched && matched.wordIdx !== playbackWord) {
+          playbackWord = matched.wordIdx;
+          updatePlayer();
+        }
+      }
+    };
+
+    utterance.onend = () => {
+      if (thisUtteranceId !== activeUtteranceId || !playbackActive || isPaused) return;
+      stopTtsKeepAlive();
+      activeUtteranceRef = null;
+      (window as any)._lexiActiveUtterance = null;
+      if (playbackIndex < parts.length - 1) {
+        // Transition smoothly to next paragraph without cancelling speech queue
+        setTimeout(() => {
+          if (playbackActive && !isPaused) {
+            playFrom(playbackIndex + 1, 0, false);
+          }
+        }, 150);
+      } else {
+        finishPlayback();
+      }
+    };
+
+    utterance.onerror = (e) => {
+      if (thisUtteranceId !== activeUtteranceId) return;
+      stopTtsKeepAlive();
+      activeUtteranceRef = null;
+      (window as any)._lexiActiveUtterance = null;
+      if (e.error === "canceled" || e.error === "interrupted") {
+        return;
+      }
+      console.warn("Speech synthesis notice:", e.error);
+      // Auto-advance so audio playback never gets stuck halfway through an article!
+      if (playbackActive && !isPaused && playbackIndex < parts.length - 1) {
+        setTimeout(() => {
+          if (playbackActive && !isPaused) {
+            playFrom(playbackIndex + 1, 0, false);
+          }
+        }, 200);
+      } else {
+        finishPlayback();
+      }
+    };
+
+    startTtsKeepAlive();
+    speechSynthesis.speak(utterance);
   };
 
-  startTtsKeepAlive();
-  speechSynthesis.speak(utterance);
+  // Preferred path: neural cloud voice (real accents, human-sounding).
+  if (cloudTtsEnabled) {
+    const cloudId = thisUtteranceId;
+    speakViaCloud(textToSpeak, wordSpans.length, (index) => {
+      if (cloudId !== activeUtteranceId || !playbackActive || isPaused) return;
+      const span = wordSpans[index];
+      if (span && span.wordIdx !== playbackWord) {
+        playbackWord = span.wordIdx;
+        updatePlayer();
+      }
+    })
+      .then(() => {
+        if (cloudId !== activeUtteranceId || !playbackActive || isPaused) return;
+        advance();
+      })
+      .catch((err) => {
+        if (cloudId !== activeUtteranceId) return;
+        handleCloudFailure(err, speakWithSystemEngine);
+      });
+
+    // Warm the next paragraph while this one plays, so continuous reading
+    // doesn't stall between sentences.
+    if (playbackIndex < parts.length - 1) {
+      const nextText = getParagraphCleanText(parts[playbackIndex + 1]).trim();
+      if (nextText) prefetchCloud(nextText);
+    }
+    return;
+  }
+
+  speakWithSystemEngine();
 }
 
 function speak(text: string) {
@@ -1391,25 +1692,43 @@ function speak(text: string) {
   const parts = playbackParts();
   const found = parts.findIndex((p) => p.innerText.trim() === text.trim());
   if (found >= 0) return playFrom(found);
-  if (!("speechSynthesis" in window)) return alert("当前浏览器不支持语音朗读");
   stopSpeechSafely();
-  const u = setEnglishVoice(new SpeechSynthesisUtterance(text));
-  u.rate = Math.max(0.1, Math.min(10, 0.88 * selectedRate));
-  speechSynthesis.speak(u);
+
+  const withSystem = () => {
+    if (!("speechSynthesis" in window)) return alert("当前浏览器不支持语音朗读");
+    const u = setEnglishVoice(new SpeechSynthesisUtterance(text));
+    u.rate = Math.max(0.1, Math.min(10, 0.88 * selectedRate));
+    speechSynthesis.speak(u);
+  };
+
+  if (cloudTtsEnabled) {
+    speakViaCloud(text, 1, () => {}).catch((err) => handleCloudFailure(err, withSystem));
+    return;
+  }
+  withSystem();
 }
 
 function speakWord(word: string) {
-  if (!("speechSynthesis" in window)) return alert("当前浏览器不支持语音朗读");
   if (importedAudio) importedAudio.pause();
   playbackActive = false;
   stopSpeechSafely();
-  const u = setEnglishVoice(new SpeechSynthesisUtterance(word));
-  u.rate = Math.max(0.1, Math.min(10, 0.88 * selectedRate));
   if ($("#audioPlayer")) $("#audioPlayer").hidden = false;
   if ($("#nowSpeaking")) {
-    $("#nowSpeaking").textContent = `${accentLabels[selectedAccent]}单词朗读 · ${word}`;
+    $("#nowSpeaking").textContent = `${voiceLabelOf(selectedVoiceId)}朗读 · ${word}`;
   }
-  speechSynthesis.speak(u);
+
+  const withSystem = () => {
+    if (!("speechSynthesis" in window)) return alert("当前浏览器不支持语音朗读");
+    const u = setEnglishVoice(new SpeechSynthesisUtterance(word));
+    u.rate = Math.max(0.1, Math.min(10, 0.88 * selectedRate));
+    speechSynthesis.speak(u);
+  };
+
+  if (cloudTtsEnabled) {
+    speakViaCloud(word, 1, () => {}).catch((err) => handleCloudFailure(err, withSystem));
+    return;
+  }
+  withSystem();
 }
 
 if ($("#speakArticle")) $("#speakArticle").onclick = () => playFrom(0);
@@ -1418,6 +1737,12 @@ if ($("#togglePlay")) {
   $("#togglePlay").onclick = () => {
     if (isPaused && playbackActive) {
       isPaused = false;
+      // Cloud audio is a plain <audio> element — resume it directly.
+      if (activeCloudAudio) {
+        activeCloudAudio.play().catch(() => playFrom(playbackIndex, playbackWord));
+        updatePlayer();
+        return;
+      }
       if (importedAudio || activeUtteranceRef) {
         resumePlaybackEngine(importedAudio, importedAudio ? null : speechSynthesis);
         if (!importedAudio) startTtsKeepAlive();
@@ -1433,7 +1758,11 @@ if ($("#togglePlay")) {
     }
     isPaused = true;
     stopTtsKeepAlive();
-    pausePlaybackEngine(importedAudio, importedAudio ? null : speechSynthesis);
+    if (activeCloudAudio) {
+      activeCloudAudio.pause();
+    } else {
+      pausePlaybackEngine(importedAudio, importedAudio ? null : speechSynthesis);
+    }
     updatePlayer();
   };
 }
@@ -1544,13 +1873,44 @@ if ($("#playbackRate")) {
   };
 }
 
+// Populate the voice picker from the shared catalogue (accent groups, both genders)
 if ($("#voiceAccent")) {
-  $("#voiceAccent").onchange = (e: any) => {
-    selectedAccent = e.target.value;
+  const voiceSelect = $("#voiceAccent") as HTMLSelectElement;
+  voiceSelect.innerHTML = "";
+  for (const accent of availableAccents()) {
+    const group = document.createElement("optgroup");
+    group.label = ACCENT_LABELS[accent] || accent;
+    for (const voice of EDGE_VOICES.filter((v) => v.accent === accent)) {
+      const option = document.createElement("option");
+      option.value = voice.id;
+      option.textContent = voice.label;
+      group.appendChild(option);
+    }
+    voiceSelect.appendChild(group);
+  }
+  voiceSelect.value = selectedVoiceId;
+  // A missing value means the saved voice is no longer offered — fall back.
+  if (!voiceSelect.value) {
+    selectedVoiceId = DEFAULT_VOICE_ID;
+    voiceSelect.value = DEFAULT_VOICE_ID;
+  }
+
+  voiceSelect.onchange = (e: any) => {
+    selectedVoiceId = e.target.value;
+    store("lexi-voice", selectedVoiceId);
+    // A new voice deserves a fresh attempt: the previous failure may have been
+    // a transient network problem rather than an outage.
+    cloudTtsEnabled = true;
+    cloudTtsFailures = 0;
+
+    // A brand-new voice is always an uncached synthesis, so say what's
+    // happening instead of leaving the user staring at a silent player.
+    if ($("#nowSpeaking")) {
+      $("#nowSpeaking").textContent = `已切换至 ${voiceLabelOf(selectedVoiceId)} · 正在合成…`;
+    }
+
     if (playbackActive && !importedAudio) {
       playFrom(playbackIndex, playbackWord);
-    } else if ($("#nowSpeaking")) {
-      $("#nowSpeaking").textContent = `已切换至${accentLabels[selectedAccent]}发音`;
     }
   };
 }
@@ -2407,23 +2767,64 @@ $("#noteContentInput")?.addEventListener("keydown", (e: KeyboardEvent) => {
   }
 });
 
-function locateAndHighlightQuote(quoteText: string) {
-  if (!quoteText) return;
-  const container = $("#articleContent");
-  if (!container) return;
+/** Scrolls a paragraph into view and flashes it so the target is unmistakable. */
+function flashLocatedParagraph(el: HTMLElement) {
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.add("quote-locate-flash");
+  window.setTimeout(() => el.classList.remove("quote-locate-flash"), 1900);
+}
 
-  const clean = quoteText.trim().toLowerCase();
-  const paragraphs = [...container.querySelectorAll("p")];
-  for (const p of paragraphs) {
-    if (p.textContent?.toLowerCase().includes(clean)) {
-      p.scrollIntoView({ behavior: "smooth", block: "center" });
-      p.style.transition = "background-color 0.4s ease";
-      p.style.backgroundColor = "rgba(56, 142, 94, 0.16)";
-      setTimeout(() => {
-        p.style.backgroundColor = "";
-      }, 1800);
-      break;
+/**
+ * Jumps from a note back to its source text.
+ *
+ * Handles the cases the old quote-only matcher missed:
+ *  1. the note belongs to a *different* article → switch there first
+ *  2. the paragraph index was recorded → jump straight to it (most reliable)
+ *  3. only a quote is known → strict match, then a punctuation-insensitive one
+ * Returns true when the source paragraph was found.
+ */
+async function locateNoteSource(note: { articleId?: string; paraIndex?: number; quote?: string }): Promise<boolean> {
+  // Leave the original/PDF stage so the standard article view is on screen.
+  if (isOriginalPlaybackMode) exitOriginalPlaybackMode();
+
+  // 1) cross-article jump
+  if (note.articleId && note.articleId !== current.id) {
+    const target = articles.find((a) => a.id === note.articleId);
+    if (target) {
+      stopSpeechSafely();
+      if (importedAudio) {
+        importedAudio.pause();
+        if (importedAudio.src.startsWith("blob:")) URL.revokeObjectURL(importedAudio.src);
+        importedAudio = null;
+      }
+      current = target;
+      bilingualCache = {};
+      renderArticle();
+      go("reader");
+      await new Promise((r) => window.setTimeout(r, 80)); // let the DOM settle
     }
+  }
+
+  const container = $("#articleContent");
+  if (!container) return false;
+  const paragraphEls = Array.from(container.querySelectorAll("p")) as HTMLElement[];
+  const index = findNoteParagraph(
+    paragraphEls.map((p) => p.textContent || ""),
+    note
+  );
+  if (index === -1) return false;
+  flashLocatedParagraph(paragraphEls[index]);
+  return true;
+}
+
+/** Wrapper used by note cards: locates the source and reports failure visibly. */
+async function locateNoteFromCard(noteId: string) {
+  const idx = notes.findIndex((n, i) => (n.id || `legacy-${i}`) === noteId);
+  if (idx === -1) return;
+  const found = await locateNoteSource(notes[idx]);
+  if (!found) {
+    // Silence here used to make the button look broken — say what happened.
+    alert("未能定位到原文：这篇内容的正文可能已被修改或替换。");
   }
 }
 
@@ -2448,8 +2849,9 @@ function renderNotes() {
   container.innerHTML = displayNotes
     .map((n, i) => {
       const noteId = n.id || `legacy-${i}`;
+      const canLocate = Boolean(n.quote) || typeof n.paraIndex === "number";
       const quoteHtml = n.quote
-        ? `<div class="note-quote-preview" data-quote="${escapeHtml(n.quote)}" title="点击在正文中高亮定位此句">
+        ? `<div class="note-quote-preview" data-note="${noteId}" title="点击跳回原文位置">
             “${escapeHtml(n.quote.length > 80 ? n.quote.slice(0, 80) + "…" : n.quote)}”
           </div>`
         : "";
@@ -2463,7 +2865,7 @@ function renderNotes() {
           ${quoteHtml}
           <div class="note-text-content">${escapeHtml(n.text)}</div>
           <div class="note-card-actions">
-            ${n.quote ? `<button class="note-action-btn locate-btn" data-quote="${escapeHtml(n.quote)}">🎯 定位原文</button>` : ""}
+            ${canLocate ? `<button class="note-action-btn locate-btn" data-note="${noteId}">🎯 跳回原文</button>` : ""}
             <button class="note-action-btn edit-btn" data-id="${noteId}">✎ 编辑</button>
             <button class="note-action-btn delete delete-btn" data-id="${noteId}">🗑 删除</button>
           </div>
@@ -2476,8 +2878,8 @@ function renderNotes() {
   container.querySelectorAll(".locate-btn, .note-quote-preview").forEach((el: Element) => {
     (el as HTMLElement).onclick = (e) => {
       e.stopPropagation();
-      const quote = (el as HTMLElement).dataset.quote;
-      if (quote) locateAndHighlightQuote(quote);
+      const noteId = (el as HTMLElement).dataset.note;
+      if (noteId) locateNoteFromCard(noteId);
     };
   });
 
@@ -3118,6 +3520,77 @@ async function extractPdf(file: File) {
 }
 
 if ($("#importText")) $("#importText").onclick = () => $("#textFileInput")?.click();
+
+// ==========================================
+// Web article import (server-side fetch — avoids CORS)
+// ==========================================
+async function importFromUrl(rawUrl: string) {
+  const msg = $("#urlImportMsg");
+  const confirmBtn = $("#urlImportConfirm") as HTMLButtonElement | null;
+  if (msg) msg.textContent = "正在抓取并提取正文…";
+  if (confirmBtn) confirmBtn.disabled = true;
+  try {
+    const res = await fetch("/api/fetch-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: rawUrl }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      if (msg) msg.textContent = "✕ " + (data.error || "抓取失败");
+      return;
+    }
+    $("#urlImportDialog")?.close();
+    const paragraphs = String(data.text).split(/\n{2,}/).map((p: string) => p.trim()).filter(Boolean);
+    openEditor(
+      {
+        id: "",
+        title: data.title || rawUrl,
+        body: paragraphsFromText(paragraphs.join("\n\n")),
+        created: "刚刚",
+      },
+      false
+    );
+    if (msg) msg.textContent = "";
+  } catch {
+    if (msg) msg.textContent = "✕ 网络错误，请确认本地服务已启动";
+  } finally {
+    if (confirmBtn) confirmBtn.disabled = false;
+  }
+}
+
+if ($("#importUrl")) {
+  $("#importUrl").onclick = () => {
+    const msg = $("#urlImportMsg");
+    if (msg) msg.textContent = "";
+    $("#urlImportDialog")?.showModal();
+    ($("#urlImportInput") as HTMLInputElement | null)?.focus();
+  };
+}
+if ($("#closeUrlImportBtn")) $("#closeUrlImportBtn").onclick = () => $("#urlImportDialog")?.close();
+if ($("#urlImportConfirm")) {
+  $("#urlImportConfirm").onclick = () => {
+    const input = $("#urlImportInput") as HTMLInputElement | null;
+    const url = input?.value.trim() || "";
+    if (!url) {
+      const msg = $("#urlImportMsg");
+      if (msg) msg.textContent = "请先粘贴网址";
+      return;
+    }
+    importFromUrl(url);
+  };
+}
+{
+  const urlInput = $("#urlImportInput") as HTMLInputElement | null;
+  if (urlInput) {
+    urlInput.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        ($("#urlImportConfirm") as HTMLButtonElement | null)?.click();
+      }
+    });
+  }
+}
 if ($("#openPdfReader")) {
   $("#openPdfReader").onclick = () => {
     if ($("#textFileInput")) {
@@ -3743,8 +4216,20 @@ if ($("#textFileInput")) {
 
         openEditor({ id: "", title: file.name.replace(/\.[^.]+$/, ""), body: finalText, created: "刚刚" }, false);
       }
-    } catch {
-      alert("无法读取该文件。PDF 导入需要网络连接以加载解析组件。");
+    } catch (err: any) {
+      // This used to swallow every failure behind a stale "needs network" hint,
+      // which was both wrong (pdf.js is bundled) and undiagnosable.
+      console.error("[import] 导入失败:", err);
+      const detail = err?.message || String(err);
+      let hint = "";
+      if (/PDF 引擎/.test(detail)) {
+        hint = "请重启应用后重试。";
+      } else if (/Invalid PDF|结构/.test(detail)) {
+        hint = "该文件可能已损坏，或不是标准 PDF。";
+      } else if (/password|encrypted/i.test(detail)) {
+        hint = "该 PDF 有密码保护，暂不支持。";
+      }
+      alert(`导入失败：${detail}${hint ? "\n\n" + hint : ""}`);
     } finally {
       e.target.value = "";
       e.target.accept = ".txt,.pdf,.epub,text/plain,application/pdf,application/epub+zip";
@@ -4264,13 +4749,38 @@ async function fetchSimplification(level: string) {
   statusEl.textContent = "改写服务未能连接，请稍后再试。";
 }
 
+/**
+ * Marks every word the simplifier swapped out, in the rewritten body.
+ * Learners can then see *which* words were "too hard" and hover to reveal the
+ * original — the whole point of adapting difficulty.
+ */
+function decorateSimplifiedBody(bodyHtml: string, adaptations: any[]): string {
+  let html = bodyHtml;
+  for (const ad of adaptations || []) {
+    const simplified = String(ad.simplifiedPhrase || "").trim();
+    const original = String(ad.originalPhrase || "").trim();
+    if (!simplified || !original || simplified.length < 3) continue;
+    // Skip multi-word phrases that appear as full sentences (too noisy).
+    if (simplified.split(/\s+/).length > 6) continue;
+
+    const escaped = escapeHtml(simplified).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(?![^<]*>)${escaped}`, "i"); // never match inside a tag
+    html = html.replace(
+      re,
+      `<span class="vocab-replaced" data-original="${escapeHtml(original)}" title="原文：${escapeHtml(original)}">${escapeHtml(simplified)}</span>`
+    );
+  }
+  return html;
+}
+
 if ($("#applySimplifyBtn")) {
   $("#applySimplifyBtn").onclick = () => {
     if (!lastSimplifiedResult) return;
     if (!current.originalBody) {
       current.originalBody = current.body;
     }
-    current.body = paragraphsFromText(lastSimplifiedResult.simplifiedText);
+    const paragraphs = paragraphsFromText(lastSimplifiedResult.simplifiedText);
+    current.body = decorateSimplifiedBody(paragraphs, lastSimplifiedResult.adaptations);
     current.level = selectedTargetLevel;
     store("lexi-articles", articles);
     renderArticle();

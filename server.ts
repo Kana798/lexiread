@@ -7,6 +7,11 @@ import { buildYoudaoRequest } from "./src/youdao-translation";
 import { translateViaPublicProviders } from "./src/public-translation";
 import { resolveEnvCandidates, loadEnvFromCandidates, pickRecommendedEnvPath } from "./src/env-loader";
 import { parseLlmJson, schemaToPrompt, upsertEnvKey, isLoopbackAddress } from "./src/llm-utils";
+import { isBlockedHost, extractReadableText } from "./src/web-import";
+import { isKnownVoice, DEFAULT_VOICE_ID, langOfVoice } from "./src/tts-voices";
+import { edgeTtsPool } from "./src/edge-tts-pool";
+import { EdgeTTS } from "node-edge-tts";
+import os from "node:os";
 
 import { resolveServerRuntime } from './server-runtime';
 
@@ -777,6 +782,201 @@ app.post("/api/backup", (req: Request, res: Response) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Web article import.
+//
+// Fetching happens server-side (the renderer would hit CORS), which means the
+// user-supplied URL must be treated as untrusted: block non-HTTP schemes and
+// private/link-local addresses so this proxy can never be used to probe the
+// user's own network (SSRF).
+// ---------------------------------------------------------------------------
+const URL_FETCH_TIMEOUT_MS = 15000;
+const URL_MAX_BYTES = 3 * 1024 * 1024;
+
+app.post("/api/fetch-url", async (req: Request, res: Response) => {
+  if (!isLoopbackAddress(req.socket.remoteAddress || "")) {
+    res.status(403).json({ ok: false, error: "网页导入仅允许在本机操作" });
+    return;
+  }
+  const rawUrl = typeof req.body?.url === "string" ? req.body.url.trim() : "";
+  if (!rawUrl) {
+    res.status(400).json({ ok: false, error: "请提供网址" });
+    return;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    res.status(400).json({ ok: false, error: "网址格式不正确" });
+    return;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    res.status(400).json({ ok: false, error: "只支持 http / https 网址" });
+    return;
+  }
+  if (isBlockedHost(parsed.hostname)) {
+    res.status(403).json({ ok: false, error: "出于安全考虑，不能访问本机或内网地址" });
+    return;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), URL_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(parsed.toString(), {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; LexiRead/1.2; +https://github.com/Kana798/lexiread)",
+        Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en,zh-CN;q=0.8",
+      },
+    });
+    clearTimeout(timer);
+
+    // A redirect may have landed somewhere private — re-check the final URL.
+    try {
+      if (isBlockedHost(new URL(response.url).hostname)) {
+        res.status(403).json({ ok: false, error: "页面重定向到内网地址，已阻止" });
+        return;
+      }
+    } catch {
+      /* response.url unusable — fall through and rely on the content check */
+    }
+
+    if (!response.ok) {
+      res.status(400).json({ ok: false, error: `目标站点返回 ${response.status}` });
+      return;
+    }
+    const contentType = response.headers.get("content-type") || "";
+    if (!/text\/html|application\/xhtml|text\/plain/i.test(contentType)) {
+      res.status(400).json({ ok: false, error: "该地址不是网页内容" });
+      return;
+    }
+
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > URL_MAX_BYTES) {
+      res.status(413).json({ ok: false, error: "网页内容过大（超过 3MB）" });
+      return;
+    }
+    const html = new TextDecoder("utf-8").decode(buffer);
+    const { title, text } = extractReadableText(html);
+    if (!text || text.replace(/\s/g, "").length < 80) {
+      res.status(422).json({ ok: false, error: "未能提取到正文，该页面可能是动态渲染或需要登录" });
+      return;
+    }
+
+    res.json({ ok: true, url: response.url, title, text });
+  } catch (err: any) {
+    clearTimeout(timer);
+    const aborted = err?.name === "AbortError";
+    res.status(aborted ? 504 : 500).json({
+      ok: false,
+      error: aborted ? "抓取超时，请检查网络或换一个网址" : `抓取失败: ${err?.message || err}`,
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Neural text-to-speech (Microsoft Edge voices).
+//
+// The system speech engine only ships a couple of robotic en-US voices, so
+// accent switching was impossible and quality was poor. Edge's neural voices
+// are free, keyless and near-human. Synthesis is done here (not in the
+// renderer) because the protocol needs a WebSocket and specific headers.
+//
+// Responses are cached briefly: reading aloud re-requests the same sentences
+// on replay, and every miss costs a round trip to Microsoft.
+// ---------------------------------------------------------------------------
+const TTS_MAX_CHARS = 2000;
+const TTS_CACHE_LIMIT = 80;
+const TTS_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const ttsCache = new Map<string, Buffer>();
+
+function cacheTts(key: string, buffer: Buffer) {
+  if (ttsCache.size >= TTS_CACHE_LIMIT) {
+    const oldest = ttsCache.keys().next().value;
+    if (oldest !== undefined) ttsCache.delete(oldest);
+  }
+  ttsCache.set(key, buffer);
+}
+
+/**
+ * Prefers the warm connection pool (~0.5s per utterance) and falls back to the
+ * packaged client, which opens a new WebSocket for every call (~1.8s) but is
+ * the more battle-tested path.
+ */
+async function synthesizeVoice(text: string, voice: string, rate: string): Promise<Buffer> {
+  try {
+    return await edgeTtsPool.synthesize({
+      text,
+      voice,
+      lang: langOfVoice(voice),
+      format: TTS_FORMAT,
+      rate,
+    });
+  } catch (poolError: any) {
+    console.warn("[tts] 连接池不可用，回退到独立连接:", poolError?.message || poolError);
+    const tmpFile = path.join(os.tmpdir(), `lexi-tts-${randomUUID()}.mp3`);
+    try {
+      const tts = new EdgeTTS({
+        voice,
+        lang: langOfVoice(voice),
+        outputFormat: TTS_FORMAT,
+        rate,
+        timeout: 20000,
+      });
+      await tts.ttsPromise(text, tmpFile);
+      return fs.readFileSync(tmpFile);
+    } finally {
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+  }
+}
+
+app.post("/api/tts", async (req: Request, res: Response) => {
+  const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+  const requestedVoice = typeof req.body?.voice === "string" ? req.body.voice : "";
+  const requestedRate = typeof req.body?.rate === "string" ? req.body.rate : "default";
+
+  if (!text) {
+    res.status(400).json({ ok: false, error: "缺少朗读文本" });
+    return;
+  }
+  if (text.length > TTS_MAX_CHARS) {
+    res.status(413).json({ ok: false, error: `文本过长（上限 ${TTS_MAX_CHARS} 字符）` });
+    return;
+  }
+  // Never pass an unvalidated voice string into the synthesiser.
+  const voice = isKnownVoice(requestedVoice) ? requestedVoice : DEFAULT_VOICE_ID;
+  // Only accept the +/-N% shape Edge expects.
+  const rate = /^[+-]\d{1,3}%$/.test(requestedRate) ? requestedRate : "default";
+
+  const cacheKey = `${voice}|${rate}|${text}`;
+  const cached = ttsCache.get(cacheKey);
+  if (cached) {
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("X-TTS-Cache", "hit");
+    res.send(cached);
+    return;
+  }
+
+  try {
+    const buffer = await synthesizeVoice(text, voice, rate);
+    if (!buffer.length) throw new Error("合成结果为空");
+    cacheTts(cacheKey, buffer);
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("X-TTS-Cache", "miss");
+    res.send(buffer);
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: `语音合成失败: ${err?.message || err}` });
+  }
+});
+
 function decodeHtmlEntities(str: string): string {
   return str
     .replace(/&#39;/g, "'")
@@ -1364,12 +1564,26 @@ app.post("/api/simplify", async (req: Request, res: Response) => {
   const ai = getLlmClient();
   if (ai) {
     try {
-      const prompt = `Rewrite the following English text to suit a CEFR ${targetLevel} English learner.
+      // Guard against oversized input: the model has a context limit and a
+      // truncated rewrite is worse than an explicit one.
+      const MAX_CHARS = 6000;
+      const source = text.trim().slice(0, MAX_CHARS);
+      const truncated = text.trim().length > MAX_CHARS;
+
+      const prompt = `Rewrite the following English text so a CEFR ${targetLevel} learner can read it comfortably.
+
+RULES:
+1. Replace words and phrases above the ${targetLevel} level with more common alternatives.
+2. Simplify complicated sentences, but keep the original meaning, facts and order intact.
+3. Do NOT summarize, and do NOT add or remove information.
+4. In "adaptations", list EVERY meaningful vocabulary substitution you made — aim for 5-15 entries covering the hardest words. Skip trivial function words (a/the/of).
+5. For each entry give the exact original phrase, the exact replacement that appears in the simplified text, and a one-line Chinese reason.
+6. "summaryChinese": a short Chinese sentence describing what you simplified.
+${truncated ? `\nNote: the input was truncated to the first ${MAX_CHARS} characters — only rewrite what is provided.` : ""}
 Original text:
-"""${text.trim()}"""`;
+"""${source}"""`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
         contents: prompt,
         config: {
           responseMimeType: "application/json",
@@ -1968,6 +2182,21 @@ async function startServer() {
       `[config] Translation chain: youdao=${Boolean(process.env.YOUDAO_APP_KEY)} ` +
         `deepseek=${hasBuiltInLlmKey()}`
     );
+
+    // Warm the neural-voice WebSocket so the very first word tap doesn't pay
+    // the ~1.2s handshake. Failure is expected (and harmless) when offline.
+    setTimeout(() => {
+      edgeTtsPool
+        .synthesize({
+          text: "Hi",
+          voice: DEFAULT_VOICE_ID,
+          lang: "en-US",
+          format: TTS_FORMAT,
+          rate: "default",
+        })
+        .then((audio) => console.log(`[tts] 语音连接已预热 (${audio.length} bytes)`))
+        .catch((err) => console.warn("[tts] 预热失败（离线时属正常）:", err?.message || err));
+    }, 1200);
   });
 }
 

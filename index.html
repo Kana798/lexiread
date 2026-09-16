@@ -451,15 +451,10 @@
             </button>
           </div>
           <div class="player-tools-group">
-            <div class="player-pill-select" title="发音口音">
+            <div class="player-pill-select" title="朗读音色（微软神经网络语音，支持多国口音与男女声）">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
-              <select id="voiceAccent">
-                <option value="en-US">美音</option>
-                <option value="en-GB">英音</option>
-                <option value="en-AU">澳音</option>
-                <option value="en-CA">加音</option>
-                <option value="en-IE">爱尔兰</option>
-              </select>
+              <!-- options are generated from src/tts-voices.ts so the list stays in sync -->
+              <select id="voiceAccent"></select>
             </div>
             <div class="player-pill-select" title="朗读语速">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
@@ -490,6 +485,7 @@
         </div>
         <div class="header-actions">
           <button class="outline-btn" id="importText">导入文件</button>
+          <button class="outline-btn" id="importUrl" title="粘贴英文文章网址，自动提取正文">🌐 导入网页</button>
           <button class="primary-btn" id="newText">＋ 新建文本</button>
         </div>
       </header>
@@ -674,6 +670,29 @@
   </main>
 
   <!-- MODALS -->
+  <!-- Web article import: paste a URL, fetch and extract the readable text -->
+  <dialog id="urlImportDialog" class="custom-modal">
+    <div class="modal-head">
+      <h2>从网址导入文章</h2>
+      <button id="closeUrlImportBtn" class="icon-btn">×</button>
+    </div>
+    <div class="url-import-body">
+      <input
+        id="urlImportInput"
+        class="url-import-input"
+        type="url"
+        placeholder="https://example.com/english-article"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <p id="urlImportMsg" class="url-import-msg"></p>
+      <p class="url-import-hint">仅支持公开网页；登录墙或纯动态渲染的页面可能提取失败</p>
+    </div>
+    <div class="modal-actions">
+      <button id="urlImportConfirm" class="primary-btn">抓取并导入</button>
+    </div>
+  </dialog>
+
   <!-- First-run setup guide: shown when the built-in LLM key is missing -->
   <dialog id="setupGuideDialog">
     <div class="setup-guide">
