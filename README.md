@@ -7,7 +7,7 @@
 **本地优先的英语精读工具** — 划词翻译 · 语法拆解 · 神经网络语音朗读 · PDF/EPUB/网页导入 · 难度分级 · AI 伴读 · 间隔重复复习
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.4.2-brightgreen.svg)](https://github.com/Kana798/lexiread/releases)
+[![Release](https://img.shields.io/badge/Release-v1.4.3-brightgreen.svg)](https://github.com/Kana798/lexiread/releases)
 [![Tests](https://img.shields.io/badge/Tests-92_passing-success.svg)](#-开发与测试)
 
 <sub>by **LSJKANA**</sub>
@@ -36,10 +36,10 @@
 
 ## 📥 下载
 
-前往 [Releases](https://github.com/Kana798/lexiread/releases) 下载最新版（`v1.4.2`）：
+前往 [Releases](https://github.com/Kana798/lexiread/releases) 下载最新版（`v1.4.3`）：
 
-- **`LexiRead.Setup.1.4.2.exe`** — NSIS 安装版
-- **`LexiRead.1.4.2.exe`** — 免安装便携版
+- **`LexiRead.Setup.1.4.3.exe`** — NSIS 安装版
+- **`LexiRead.1.4.3.exe`** — 免安装便携版
 
 > ⚠️ 公开仓库发布的安装包**不含内置翻译凭证**（安全基线）。下载后按下方说明配置自己的
 > 有道智云 / DeepSeek Key，或使用应用内的首跑引导直接粘贴 Key。
